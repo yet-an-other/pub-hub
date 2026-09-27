@@ -25,7 +25,7 @@ _Avoid_: Site, archive, package
 ### Actors and surfaces
 
 **Portal**:
-The authenticated UI and publish API on the same host as the Artifacts; it owns storage and metadata of all Artifacts.
+The authenticated UI and publish API, on its own host separate from the Artifacts; it owns storage and metadata of all Artifacts.
 _Avoid_: Admin, dashboard, backend
 
 **Publisher**:
