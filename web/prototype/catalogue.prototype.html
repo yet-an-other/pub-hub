@@ -1,0 +1,716 @@
+<!doctype html>
+<!--
+  PROTOTYPE — throwaway. Answers "Catalogue UI" (pub-hub map #1, ticket #9):
+  what should the Catalogue look like and do?
+
+  Three structurally different Catalogues on one page, switchable via ?variant=A|B|C
+  (floating bar at the bottom, or ← / → keys):
+    A  Explorer        — tree navigation first (Project → Category → Artifact), detail pane
+    B  Table           — one dense sortable/filterable table, inline row expansion, publish modal
+    C  Search+Preview  — search box first, live preview dominates, drop-anywhere publish
+
+  In-memory mock data only; every mutation is a stub (nothing leaves the browser).
+  Files you pick or drop ARE read locally (names, sizes, <title>) to make publishing feel real.
+  The "{ }" button on the bar shows the full state and lets you force the next publish outcome.
+  Run: open this file in a browser (xdg-open web/prototype/catalogue.prototype.html).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pub-hub Catalogue — PROTOTYPE</title>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+</head>
+<body class="bg-stone-50 text-stone-900 antialiased">
+<div id="root"></div>
+<script type="module">
+import React, { useState, useEffect, useMemo, useRef, useReducer, useCallback } from 'https://esm.sh/react@18.3.1';
+import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
+import htm from 'https://esm.sh/htm@3.1.1';
+const html = htm.bind(React.createElement);
+
+// ───────────────────────── mock data ─────────────────────────
+const PUB = 'https://pub.bdgn.me/';
+const ME = 'owner@bdgn.me';
+const d = (s) => new Date(s).toISOString();
+const initialState = {
+  projects: {
+    'xform': 'Explainers, review notes and UI prototypes for the xform VPN panel.',
+    'garden-plans': 'Planting layouts for spring 2027. Nothing published yet.',
+  },
+  artifacts: [
+    { path: 'xform/explanations/auth-seam.html', title: 'How the xform auth seam works', description: 'Walkthrough prepared for the 12 Sep review; covers the assertion header and the gateway.', created: d('2026-09-12T10:03'), updated: d('2026-09-26T18:44'), publisher: 'laptop-cli', size: 48213, files: 1, state: 'published' },
+    { path: 'xform/explanations/roster-sync/', title: 'Roster sync, step by step', description: '', created: d('2026-09-02T09:10'), updated: d('2026-09-02T09:10'), publisher: 'agent-desktop', size: 1843220, files: 37, state: 'published' },
+    { path: 'xform/prototypes/panel-redesign/', title: 'Panel redesign — option B', description: 'Clickable prototype, three screens. Vite build.', created: d('2026-08-21T15:30'), updated: d('2026-09-27T08:12'), publisher: 'agent-desktop', size: 612004, files: 14, state: 'published' },
+    { path: 'xform/prototypes/presence-chart.html', title: 'Presence chart sketch', description: '', created: d('2026-09-25T11:00'), updated: d('2026-09-25T11:00'), publisher: ME, size: 20480, files: 1, state: 'published' },
+    { path: 'sicily-2025/trip/', title: 'Sicily 2025', description: 'The trip minisite: itinerary, photos, maps.', created: d('2025-06-30T20:00'), updated: d('2025-07-14T09:00'), publisher: 'laptop-cli', size: 38201930, files: 212, state: 'published' },
+    { path: 'sicily-2025/food/palermo.html', title: 'Where we ate in Palermo', description: '', created: d('2025-07-02T21:40'), updated: d('2025-07-02T21:40'), publisher: 'laptop-cli', size: 91002, files: 1, state: 'published' },
+    { path: 'pub-hub/adr-digest.html', title: 'pub-hub ADR digest', description: 'One page summarising ADRs 0001–0004.', created: d('2026-09-27T12:00'), updated: d('2026-09-27T12:00'), publisher: 'agent-desktop', size: 30311, files: 1, state: 'published' },
+    { path: 'pub-hub/notes/catalogue-ideas.html', title: 'Catalogue ideas', description: '', created: d('2026-09-27T13:20'), updated: d('2026-09-27T13:21'), publisher: 'agent-desktop', size: 0, files: 0, state: 'publishing' },
+    { path: 'reading/papers/raft.html', title: 'Raft, annotated', description: 'Notes compiled from Markdown.', created: d('2026-03-11T19:00'), updated: d('2026-04-02T07:45'), publisher: 'laptop-cli', size: 150420, files: 1, state: 'published' },
+    { path: 'reading/papers/dynamo/', title: 'Dynamo paper club', description: '', created: d('2026-05-05T19:00'), updated: d('2026-05-05T19:00'), publisher: 'laptop-cli', size: 2203004, files: 9, state: 'published' },
+  ],
+  nextOutcome: 'ok', // debug: ok | busy | shape_conflict_forced | storage_unavailable
+};
+
+// ───────────────────────── helpers (shared logic, not layout) ─────────────────────────
+const SEG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+function parsePath(path) {
+  const kind = path.endsWith('/') ? 'bundle' : 'file';
+  const trimmed = kind === 'bundle' ? path.slice(0, -1) : path.replace(/\.html$/, '');
+  const segs = trimmed.split('/');
+  return { kind, project: segs[0], categories: segs.slice(1, -1), name: segs[segs.length - 1], stem: trimmed };
+}
+const urlOf = (path) => PUB + path;
+function validatePath(path) {
+  if (!path) return { code: 'request_invalid', message: 'Enter a target path.' };
+  const isBundle = path.endsWith('/'), isFile = path.endsWith('.html');
+  if (!isBundle && !isFile) return { code: 'path_invalid', message: 'End with .html (single file) or / (Bundle).' };
+  const { stem } = parsePath(path);
+  if (stem.length > 200) return { code: 'name_invalid', message: 'Artifact path is longer than 200 characters.' };
+  const segs = stem.split('/');
+  if (segs.length < 2) return { code: 'name_invalid', message: 'Needs a Project and a name: <project>/<category…>/<name>.' };
+  for (const s of segs) {
+    if (s === 'index') return { code: 'name_reserved', message: '"index" is reserved at every level.' };
+    if (!SEG.test(s) || s.length > 63) return { code: 'name_invalid', message: `"${s}" — use a–z, 0–9 and inner hyphens, 1–63 chars, no dots.` };
+  }
+  return null;
+}
+function checkConflicts(artifacts, path) {
+  const { stem, kind } = parsePath(path);
+  const other = kind === 'bundle' ? stem + '.html' : stem + '/';
+  if (artifacts.some((a) => a.path === other)) return { code: 'shape_conflict', message: `${other} already exists; delete it first to change shape.` };
+  for (const a of artifacts) {
+    if (a.path.endsWith('/') && path.startsWith(a.path) && path !== a.path) return { code: 'nesting_conflict', message: `Would sit inside the Bundle ${a.path}.` };
+    if (kind === 'bundle' && a.path.startsWith(path) && a.path !== path) return { code: 'nesting_conflict', message: `${path} is a Category holding ${a.path}.` };
+  }
+  return null;
+}
+const slug = (s) => s.toLowerCase().replace(/\.html?$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63) || 'untitled';
+function fmtSize(n) {
+  if (!n) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+function ago(iso) {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 90) return 'just now';
+  if (s < 3600) return Math.round(s / 60) + ' min ago';
+  if (s < 86400) return Math.round(s / 3600) + ' h ago';
+  if (s < 86400 * 30) return Math.round(s / 86400) + ' d ago';
+  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+const fullDate = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+function copy(text, setToast) { navigator.clipboard?.writeText(text).catch(() => {}); setToast?.('Copied ' + text); }
+function allProjects(state) {
+  const set = new Set(Object.keys(state.projects));
+  state.artifacts.forEach((a) => set.add(parsePath(a.path).project));
+  return [...set].sort();
+}
+
+// Read picked/dropped files: [{rel, file}] with the top folder stripped for folders.
+async function filesFromDataTransfer(dt) {
+  const out = [];
+  const items = [...(dt.items || [])].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!items.length) return filesFromList(dt.files);
+  async function walk(entry, prefix) {
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej));
+      out.push({ rel: prefix + entry.name, file });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      let batch;
+      do {
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        for (const e of batch) await walk(e, prefix + entry.name + '/');
+      } while (batch.length);
+    }
+  }
+  for (const e of items) await walk(e, '');
+  return out;
+}
+function filesFromList(list) {
+  return [...list].map((f) => ({ rel: f.webkitRelativePath || f.name, file: f }));
+}
+async function describeUpload(entries) {
+  if (!entries.length) return null;
+  const tops = new Set(entries.map((e) => e.rel.split('/')[0]));
+  const isFolder = entries.some((e) => e.rel.includes('/')) && tops.size === 1;
+  let kind, files, suggested;
+  if (isFolder) {
+    const top = [...tops][0];
+    kind = 'bundle';
+    suggested = slug(top);
+    files = entries.map((e) => ({ rel: e.rel.slice(top.length + 1), file: e.file }));
+  } else if (entries.length === 1 && /\.html?$/i.test(entries[0].rel)) {
+    kind = 'file';
+    suggested = slug(entries[0].rel);
+    files = entries;
+  } else {
+    return { error: { code: 'request_invalid', message: 'Drop one .html file or one folder.' } };
+  }
+  const dot = files.filter((f) => f.rel.split('/').some((s) => s.startsWith('.')));
+  files = files.filter((f) => !dot.includes(f));
+  const size = files.reduce((n, f) => n + f.file.size, 0);
+  const entry = kind === 'bundle' ? files.find((f) => f.rel === 'index.html') : files[0];
+  let title = '';
+  if (entry) {
+    const text = await entry.file.slice(0, 64 * 1024).text();
+    title = (text.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').trim();
+  }
+  let error = null;
+  if (kind === 'bundle' && !entry) error = { code: 'index_missing', message: 'The folder has no index.html at its root.' };
+  if (size > 100 * 1024 * 1024) error = { code: 'too_large', message: 'Over the 100 MB limit.' };
+  if (files.length > 2000) error = { code: 'too_many_files', message: 'Over the 2,000-file limit.' };
+  return { kind, suggested, count: files.length, size, skipped: dot.map((f) => f.rel), title, error };
+}
+
+// ───────────────────────── store (in-memory, stubbed API) ─────────────────────────
+function reducer(state, a) {
+  switch (a.type) {
+    case 'delete': return { ...state, artifacts: state.artifacts.filter((x) => x.path !== a.path) };
+    case 'desc': return { ...state, artifacts: state.artifacts.map((x) => (x.path === a.path ? { ...x, description: a.text } : x)) };
+    case 'projectDesc': {
+      const projects = { ...state.projects };
+      if (a.text) projects[a.project] = a.text; else delete projects[a.project];
+      return { ...state, projects };
+    }
+    case 'upsert': {
+      const i = state.artifacts.findIndex((x) => x.path === a.art.path);
+      const artifacts = [...state.artifacts];
+      if (i >= 0) artifacts[i] = { ...artifacts[i], ...a.art, created: artifacts[i].created, description: a.art.description ?? artifacts[i].description };
+      else artifacts.push({ description: '', ...a.art, created: a.art.updated });
+      return { ...state, artifacts };
+    }
+    case 'outcome': return { ...state, nextOutcome: a.value };
+    default: return state;
+  }
+}
+// Simulated PUT /ui/api/artifacts/<path>: validate → progress → result. Returns {status, body} or {error}.
+function simulatePublish(state, dispatch, { path, upload, description }, onProgress) {
+  return new Promise((resolve) => {
+    const bad = validatePath(path) || upload?.error || (state.nextOutcome === 'shape_conflict_forced' ? { code: 'shape_conflict', message: 'Forced from the debug panel.' } : null) || checkConflicts(state.artifacts, path);
+    if (bad) return resolve({ error: bad });
+    if (parsePath(path).kind !== upload.kind) return resolve({ error: { code: 'path_invalid', message: upload.kind === 'bundle' ? 'A folder publishes as a Bundle: end the path with /.' : 'A single file publishes as <name>.html.' } });
+    let p = 0;
+    const t = setInterval(() => {
+      p += 17 + Math.random() * 20;
+      onProgress(Math.min(p, 100));
+      if (p < 100) return;
+      clearInterval(t);
+      if (state.nextOutcome === 'busy') return resolve({ error: { code: 'busy', message: 'Another publish of this Artifact is running. Retry in a few seconds.', retryable: true } });
+      if (state.nextOutcome === 'storage_unavailable') return resolve({ error: { code: 'storage_unavailable', message: 'S3 is unreachable. Retry later.', retryable: true } });
+      const existed = state.artifacts.some((x) => x.path === path);
+      const now = new Date().toISOString();
+      dispatch({ type: 'upsert', art: { path, title: upload.title || parsePath(path).name, description: description === undefined ? undefined : description, updated: now, publisher: ME, size: upload.size, files: upload.count, state: 'published' } });
+      resolve({ status: existed ? 200 : 201, body: { url: urlOf(path) } });
+    }, 220);
+  });
+}
+
+// ───────────────────────── small shared bits ─────────────────────────
+function PreviewFrame({ art, className = '' }) {
+  const doc = `<!doctype html><meta charset=utf-8><body style="font:15px/1.5 system-ui;margin:0;background:#fff">
+    <div style="padding:28px 32px;border-bottom:1px solid #eee;background:linear-gradient(135deg,#fef3c7,#e0e7ff)"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#78716c">${parsePath(art.path).project}</div>
+    <h1 style="margin:6px 0 0;font-size:26px">${art.title.replace(/</g, '&lt;')}</h1></div>
+    <div style="padding:24px 32px;color:#57534e">(stand-in for ${urlOf(art.path)} — the real Catalogue frames the live Artifact from pub.bdgn.me)</div>
+    ${Array.from({ length: 6 }, (_, i) => `<div style="margin:0 32px 12px;height:${10 + (i % 3) * 6}px;border-radius:6px;background:#f5f5f4;width:${90 - i * 9}%"></div>`).join('')}</body>`;
+  return html`<iframe title="preview" sandbox="" srcdoc=${doc} className=${'bg-white ' + className}></iframe>`;
+}
+function StateBadge({ art }) {
+  if (art.state === 'publishing') return html`<span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">incomplete</span>`;
+  return null;
+}
+function KindIcon({ path, className = '' }) {
+  return parsePath(path).kind === 'bundle'
+    ? html`<span title="Bundle" className=${'inline-block w-4 text-center ' + className}>▣</span>`
+    : html`<span title="single file" className=${'inline-block w-4 text-center ' + className}>▭</span>`;
+}
+function useToast() {
+  const [toast, setToast] = useState(null);
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 2200); return () => clearTimeout(t); }, [toast]);
+  const node = toast && html`<div className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-md bg-stone-900 px-3 py-1.5 text-sm text-white shadow-lg">${toast}</div>`;
+  return [node, setToast];
+}
+function EditableText({ value, placeholder, onSave, multiline = true, className = '' }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  if (!editing) return html`<button onClick=${() => setEditing(true)} className=${'group w-full text-left ' + className}>
+      ${value ? html`<span className="whitespace-pre-wrap">${value}</span>` : html`<span className="italic text-stone-400">${placeholder}</span>`}
+      <span className="ml-2 text-xs text-stone-400 opacity-0 group-hover:opacity-100">edit</span></button>`;
+  return html`<div className=${className}>
+    ${multiline
+      ? html`<textarea autoFocus maxLength=${1000} value=${draft} onChange=${(e) => setDraft(e.target.value)} rows=${3} className="w-full rounded border border-stone-300 bg-white p-2 text-sm"></textarea>`
+      : html`<input autoFocus maxLength=${1000} value=${draft} onChange=${(e) => setDraft(e.target.value)} className="w-full rounded border border-stone-300 bg-white p-1.5 text-sm" />`}
+    <div className="mt-1 flex items-center gap-2 text-xs">
+      <button className="rounded bg-stone-900 px-2 py-1 text-white" onClick=${() => { onSave(draft.trim()); setEditing(false); }}>Save</button>
+      <button className="px-2 py-1 text-stone-500" onClick=${() => { setDraft(value); setEditing(false); }}>Cancel</button>
+      <span className="ml-auto text-stone-400">${draft.length}/1000 · private, never shown to Readers</span>
+    </div></div>`;
+}
+
+// ═════════════════════════ VARIANT A — Explorer (tree first) ═════════════════════════
+function VariantA({ state, dispatch }) {
+  const [toast, setToast] = useToast();
+  const [sel, setSel] = useState({ type: 'project', key: 'xform' });
+  const [open, setOpen] = useState({ xform: true, 'xform/explanations': true });
+  const projects = allProjects(state);
+
+  // tree: project → nested categories → artifacts
+  const tree = useMemo(() => {
+    const root = {};
+    for (const p of projects) root[p] = { cats: {}, arts: [] };
+    for (const a of state.artifacts) {
+      const { project, categories } = parsePath(a.path);
+      let node = root[project];
+      for (const c of categories) node = node.cats[c] ??= { cats: {}, arts: [] };
+      node.arts.push(a);
+    }
+    return root;
+  }, [state, projects.join()]);
+
+  function renderNode(node, prefix, depth) {
+    const cats = Object.keys(node.cats).sort();
+    return html`${cats.map((c) => {
+      const key = prefix + '/' + c;
+      return html`<div key=${key}>
+        <button onClick=${() => { setSel({ type: 'category', key }); setOpen({ ...open, [key]: !open[key] }); }}
+          className=${'flex w-full items-center gap-1 rounded px-2 py-1 text-left text-sm hover:bg-stone-200 ' + (sel.key === key ? 'bg-stone-200 font-medium' : '')}
+          style=${{ paddingLeft: 8 + depth * 14 }}>
+          <span className="w-3 text-stone-400">${open[key] ? '▾' : '▸'}</span><span className="text-stone-500">${c}/</span></button>
+        ${open[key] && renderNode(node.cats[c], key, depth + 1)}
+      </div>`;
+    })}
+    ${node.arts.sort((a, b) => a.path.localeCompare(b.path)).map((a) => html`<button key=${a.path} onClick=${() => setSel({ type: 'artifact', key: a.path })}
+        className=${'flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm hover:bg-stone-200 ' + (sel.key === a.path ? 'bg-amber-100 font-medium' : '')}
+        style=${{ paddingLeft: 20 + depth * 14 }}>
+        <${KindIcon} path=${a.path} className="text-stone-400" />
+        <span className="truncate">${parsePath(a.path).name}${parsePath(a.path).kind === 'file' ? '.html' : '/'}</span>
+        ${a.state === 'publishing' && html`<span className="ml-auto h-2 w-2 rounded-full bg-amber-500" title="incomplete"></span>`}
+      </button>`)}`;
+  }
+
+  const selectedArt = sel.type === 'artifact' ? state.artifacts.find((a) => a.path === sel.key) : null;
+  return html`<div className="flex h-screen flex-col">
+    ${toast}
+    <header className="flex items-center gap-3 border-b border-stone-200 bg-white px-4 py-2.5">
+      <span className="font-semibold">pub-hub</span><span className="text-sm text-stone-400">Catalogue</span>
+      <span className="ml-auto text-sm text-stone-500">${ME}</span><a href="#" className="text-sm text-stone-500 underline">Sign out</a>
+    </header>
+    <div className="flex min-h-0 flex-1">
+      <nav className="w-72 shrink-0 overflow-y-auto border-r border-stone-200 bg-stone-100 p-2">
+        ${projects.map((p) => html`<div key=${p} className="mb-1">
+          <button onClick=${() => { setSel({ type: 'project', key: p }); setOpen({ ...open, [p]: !open[p] }); }}
+            className=${'flex w-full items-center gap-1 rounded px-2 py-1 text-left text-sm font-semibold hover:bg-stone-200 ' + (sel.key === p ? 'bg-stone-200' : '')}>
+            <span className="w-3 text-stone-400">${open[p] ? '▾' : '▸'}</span>${p}
+            ${!tree[p].arts.length && !Object.keys(tree[p].cats).length && html`<span className="ml-auto text-xs font-normal text-stone-400">empty</span>`}
+          </button>
+          ${open[p] && renderNode(tree[p], p, 1)}
+        </div>`)}
+      </nav>
+      <main className="min-w-0 flex-1 overflow-y-auto p-6">
+        ${selectedArt
+          ? html`<${ArtifactDetailA} art=${selectedArt} dispatch=${dispatch} setToast=${setToast} state=${state} onDeleted=${() => setSel({ type: 'project', key: parsePath(selectedArt.path).project })} />`
+          : html`<${FolderViewA} sel=${sel} state=${state} dispatch=${dispatch} setSel=${setSel} setToast=${setToast} />`}
+      </main>
+    </div>
+  </div>`;
+}
+function FolderViewA({ sel, state, dispatch, setSel, setToast }) {
+  const prefix = sel.key + '/';
+  const project = sel.key.split('/')[0];
+  const children = state.artifacts.filter((a) => a.path.startsWith(prefix));
+  const direct = children.filter((a) => !a.path.slice(prefix.length).replace(/\/$/, '').includes('/'));
+  const subcats = [...new Set(children.map((a) => a.path.slice(prefix.length)).filter((r) => r.replace(/\/$/, '').includes('/')).map((r) => r.split('/')[0]))];
+  return html`<div className="mx-auto max-w-3xl">
+    <div className="text-sm text-stone-400">${sel.type === 'project' ? 'Project' : 'Category'}</div>
+    <h1 className="mb-2 text-2xl font-semibold">${sel.key}/</h1>
+    ${sel.type === 'project' && html`<${EditableText} value=${state.projects[project] || ''} placeholder="Add a Project description (private)…" onSave=${(t) => dispatch({ type: 'projectDesc', project, text: t })} className="mb-5 text-stone-600" />`}
+    <div className="divide-y divide-stone-200 rounded-lg border border-stone-200 bg-white">
+      ${subcats.map((c) => html`<button key=${c} onClick=${() => setSel({ type: 'category', key: sel.key + '/' + c })} className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-stone-50">
+        <span className="text-stone-400">${c}/</span><span className="text-xs text-stone-400">Category</span></button>`)}
+      ${direct.map((a) => html`<button key=${a.path} onClick=${() => setSel({ type: 'artifact', key: a.path })} className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-stone-50">
+        <${KindIcon} path=${a.path} className="text-stone-400" />
+        <div className="min-w-0 flex-1"><div className="truncate font-medium">${a.title} <${StateBadge} art=${a} /></div>
+          <div className="truncate text-xs text-stone-400">${a.path.slice(prefix.length)} · ${ago(a.updated)} · ${a.publisher}</div></div>
+        <span className="text-xs text-stone-400">${fmtSize(a.size)}</span></button>`)}
+      ${!subcats.length && !direct.length && html`<div className="px-4 py-6 text-center text-sm text-stone-400">Nothing here yet.</div>`}
+    </div>
+    <${DropPublishA} base=${prefix} state=${state} dispatch=${dispatch} setToast=${setToast} onDone=${(p) => setSel({ type: 'artifact', key: p })} />
+  </div>`;
+}
+function DropPublishA({ base, state, dispatch, setToast, onDone, fixedPath }) {
+  const [upload, setUpload] = useState(null);
+  const [name, setName] = useState('');
+  const [desc, setDesc] = useState('');
+  const [progress, setProgress] = useState(null);
+  const [result, setResult] = useState(null);
+  const [over, setOver] = useState(false);
+  const fileIn = useRef(), dirIn = useRef();
+  async function take(entries) {
+    const u = await describeUpload(entries);
+    setUpload(u); setResult(null); setProgress(null);
+    if (u && !u.error) setName(u.suggested);
+  }
+  const path = fixedPath || (upload && !upload.error ? base + name + (upload.kind === 'bundle' ? '/' : '.html') : '');
+  const pathErr = upload && !upload.error && (validatePath(path) || checkConflicts(state.artifacts, path));
+  const replaces = path && state.artifacts.some((a) => a.path === path);
+  async function go() {
+    setProgress(0); setResult(null);
+    const r = await simulatePublish(state, dispatch, { path, upload, description: desc || undefined }, setProgress);
+    setProgress(null); setResult(r);
+    if (!r.error) { setToast(r.status === 201 ? 'Published' : 'Replaced'); setUpload(null); setDesc(''); onDone?.(path); }
+  }
+  return html`<div className="mt-6">
+    ${!upload && html`<div onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)}
+        onDrop=${async (e) => { e.preventDefault(); setOver(false); take(await filesFromDataTransfer(e.dataTransfer)); }}
+        className=${'rounded-lg border-2 border-dashed p-6 text-center text-sm ' + (over ? 'border-amber-500 bg-amber-50' : 'border-stone-300 text-stone-500')}>
+      Drop an <b>.html</b> file or a <b>folder</b> to publish ${fixedPath ? html`as <code>${fixedPath}</code>` : html`into <code>${base}</code>`}
+      <div className="mt-2 flex justify-center gap-3">
+        <button className="underline" onClick=${() => fileIn.current.click()}>choose file</button>
+        <button className="underline" onClick=${() => dirIn.current.click()}>choose folder</button></div>
+      <input ref=${fileIn} type="file" accept=".html,.htm" className="hidden" onChange=${(e) => take(filesFromList(e.target.files))} />
+      <input ref=${dirIn} type="file" webkitdirectory="" className="hidden" onChange=${(e) => take(filesFromList(e.target.files))} />
+    </div>`}
+    ${upload && html`<div className="rounded-lg border border-stone-300 bg-white p-4 text-sm">
+      ${upload.error ? html`<div className="text-red-700"><code>${upload.error.code}</code> — ${upload.error.message}</div>` : html`
+        <div className="mb-3 text-stone-500">${upload.kind === 'bundle' ? 'Bundle' : 'Single file'} · ${upload.count} file${upload.count === 1 ? '' : 's'} · ${fmtSize(upload.size)}
+          ${upload.title && html` · title “${upload.title}”`}
+          ${upload.skipped.length > 0 && html`<div className="text-amber-700">Skipping ${upload.skipped.length} dot-file(s): ${upload.skipped.slice(0, 3).join(', ')}${upload.skipped.length > 3 ? '…' : ''}</div>`}</div>
+        ${!fixedPath && html`<label className="block text-xs text-stone-500">Name</label>
+        <div className="flex items-center gap-1 font-mono text-sm"><span className="text-stone-400">${base}</span>
+          <input value=${name} onChange=${(e) => setName(e.target.value)} className="w-56 rounded border border-stone-300 px-1.5 py-1" />
+          <span className="text-stone-400">${upload.kind === 'bundle' ? '/' : '.html'}</span></div>`}
+        <div className="mt-1 text-xs ${pathErr ? 'text-red-700' : 'text-stone-500'}">${pathErr ? html`<code>${pathErr.code}</code> — ${pathErr.message}` : html`→ ${urlOf(path)} ${replaces ? html`<b className="text-amber-700">replaces the existing Artifact</b>` : ''}`}</div>
+        <label className="mt-3 block text-xs text-stone-500">Description (optional, private)</label>
+        <textarea value=${desc} maxLength=${1000} onChange=${(e) => setDesc(e.target.value)} rows=${2} className="w-full rounded border border-stone-300 p-1.5"></textarea>
+        ${progress !== null && html`<div className="mt-3 h-1.5 overflow-hidden rounded bg-stone-200"><div className="h-full bg-amber-500 transition-all" style=${{ width: progress + '%' }}></div></div>`}`}
+      ${result?.error && html`<div className="mt-3 rounded bg-red-50 p-2 text-red-800"><code>${result.error.code}</code> — ${result.error.message}${result.error.retryable ? ' (retryable)' : ''}</div>`}
+      <div className="mt-3 flex gap-2">
+        ${!upload.error && html`<button disabled=${!!pathErr || progress !== null} onClick=${go} className="rounded bg-stone-900 px-3 py-1.5 text-white disabled:opacity-40">${result?.error?.retryable ? 'Retry' : replaces ? 'Replace' : 'Publish'}</button>`}
+        <button onClick=${() => { setUpload(null); setResult(null); }} className="px-3 py-1.5 text-stone-500">Cancel</button></div>
+    </div>`}
+  </div>`;
+}
+function ArtifactDetailA({ art, dispatch, setToast, state, onDeleted }) {
+  const [confirm, setConfirm] = useState(false);
+  const [republish, setRepublish] = useState(false);
+  useEffect(() => { setConfirm(false); setRepublish(false); }, [art.path]);
+  return html`<div className="mx-auto max-w-4xl">
+    <div className="text-sm text-stone-400">${parsePath(art.path).kind === 'bundle' ? 'Bundle' : 'Single file'} · ${art.path}</div>
+    <h1 className="mt-1 text-2xl font-semibold">${art.title} <${StateBadge} art=${art} /></h1>
+    ${art.state === 'publishing' && html`<div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+      This publish never finished (Portal stopped mid-way). Readers may see a mix of old and new files. Publish it again, or delete it.</div>`}
+    <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+      <code className="rounded bg-stone-100 px-2 py-1">${urlOf(art.path)}</code>
+      <button onClick=${() => copy(urlOf(art.path), setToast)} className="rounded border border-stone-300 px-2 py-1 hover:bg-stone-100">Copy link</button>
+      <a href=${urlOf(art.path)} target="_blank" className="rounded border border-stone-300 px-2 py-1 hover:bg-stone-100">Open ↗</a>
+      <button onClick=${() => setRepublish(!republish)} className="rounded border border-stone-300 px-2 py-1 hover:bg-stone-100">Publish new version</button>
+      ${!confirm ? html`<button onClick=${() => setConfirm(true)} className="ml-auto rounded px-2 py-1 text-red-700 hover:bg-red-50">Delete</button>`
+        : html`<span className="ml-auto flex items-center gap-2 text-red-700">Delete for everyone, immediately?
+            <button onClick=${() => { dispatch({ type: 'delete', path: art.path }); setToast('Deleted ' + art.path); onDeleted(); }} className="rounded bg-red-700 px-2 py-1 text-white">Delete</button>
+            <button onClick=${() => setConfirm(false)} className="text-stone-500">Cancel</button></span>`}
+    </div>
+    ${republish && html`<${DropPublishA} fixedPath=${art.path} base="" state=${state} dispatch=${dispatch} setToast=${setToast} onDone=${() => setRepublish(false)} />`}
+    <div className="mt-5 grid grid-cols-[1fr_16rem] gap-6">
+      <${PreviewFrame} art=${art} className="h-96 w-full rounded-lg border border-stone-200" />
+      <dl className="space-y-3 text-sm">
+        <div><dt className="text-xs text-stone-400">Description</dt><dd><${EditableText} value=${art.description} placeholder="Add a description…" onSave=${(t) => dispatch({ type: 'desc', path: art.path, text: t })} /></dd></div>
+        <div><dt className="text-xs text-stone-400">Updated</dt><dd title=${fullDate(art.updated)}>${ago(art.updated)} by ${art.publisher}</dd></div>
+        <div><dt className="text-xs text-stone-400">Created</dt><dd>${fullDate(art.created)}</dd></div>
+        <div><dt className="text-xs text-stone-400">Size</dt><dd>${fmtSize(art.size)} · ${art.files} file${art.files === 1 ? '' : 's'}</dd></div>
+      </dl>
+    </div>
+  </div>`;
+}
+
+// ═════════════════════════ VARIANT B — Table (scan/sort first) ═════════════════════════
+function VariantB({ state, dispatch }) {
+  const [toast, setToast] = useToast();
+  const [tab, setTab] = useState('artifacts');
+  const [q, setQ] = useState('');
+  const [proj, setProj] = useState('');
+  const [sort, setSort] = useState({ key: 'updated', dir: -1 });
+  const [expanded, setExpanded] = useState(null);
+  const [modal, setModal] = useState(null); // null | {path?}
+  const projects = allProjects(state);
+  const rows = useMemo(() => {
+    const ql = q.toLowerCase();
+    return state.artifacts
+      .filter((a) => (!proj || parsePath(a.path).project === proj) && (!ql || (a.path + ' ' + a.title + ' ' + a.description).toLowerCase().includes(ql)))
+      .sort((a, b) => {
+        const v = (x) => (sort.key === 'size' ? x.size : sort.key === 'title' ? x.title.toLowerCase() : sort.key === 'path' ? x.path : x[sort.key]);
+        return (v(a) > v(b) ? 1 : v(a) < v(b) ? -1 : 0) * sort.dir;
+      });
+  }, [state, q, proj, sort]);
+  const Th = ({ k, children, className = '' }) => html`<th className=${'px-3 py-2 text-left font-medium ' + className}>
+    <button onClick=${() => setSort({ key: k, dir: sort.key === k ? -sort.dir : -1 })} className="hover:text-stone-900">${children}${sort.key === k ? (sort.dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`;
+  return html`<div className="min-h-screen">
+    ${toast}
+    <header className="sticky top-0 z-10 border-b border-stone-200 bg-white">
+      <div className="flex items-center gap-4 px-5 py-2.5">
+        <span className="font-semibold">pub-hub</span>
+        <div className="flex rounded-md bg-stone-100 p-0.5 text-sm">
+          ${['artifacts', 'projects'].map((t) => html`<button key=${t} onClick=${() => setTab(t)} className=${'rounded px-3 py-1 capitalize ' + (tab === t ? 'bg-white shadow-sm' : 'text-stone-500')}>${t}</button>`)}</div>
+        <input value=${q} onChange=${(e) => setQ(e.target.value)} placeholder="Filter by path, title, description…" className="w-96 rounded-md border border-stone-300 px-3 py-1.5 text-sm" />
+        <button onClick=${() => setModal({})} className="ml-auto rounded-md bg-stone-900 px-3 py-1.5 text-sm text-white">+ Publish</button>
+        <span className="text-sm text-stone-500">${ME}</span>
+      </div>
+      ${tab === 'artifacts' && html`<div className="flex gap-1.5 px-5 pb-2 text-xs">
+        ${['', ...projects].map((p) => html`<button key=${p || 'all'} onClick=${() => setProj(p)} className=${'rounded-full border px-2.5 py-0.5 ' + (proj === p ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-300 text-stone-600')}>${p || 'All'}</button>`)}
+        <span className="ml-auto self-center text-stone-400">${rows.length} Artifacts · ${fmtSize(rows.reduce((n, a) => n + a.size, 0))}</span></div>`}
+    </header>
+    ${tab === 'projects' ? html`<${ProjectsTableB} state=${state} dispatch=${dispatch} onPick=${(p) => { setProj(p); setTab('artifacts'); }} />` : html`
+    <table className="w-full text-sm">
+      <thead className="border-b border-stone-200 bg-stone-100 text-xs text-stone-500"><tr>
+        <${Th} k="title">Artifact<//><${Th} k="updated">Updated<//><th className="px-3 py-2 text-left font-medium">Publisher</th>
+        <${Th} k="size" className="text-right">Size<//><th className="px-3 py-2"></th></tr></thead>
+      <tbody>
+        ${rows.map((a) => html`<${React.Fragment} key=${a.path}>
+          <tr onClick=${() => setExpanded(expanded === a.path ? null : a.path)} className=${'cursor-pointer border-b border-stone-100 hover:bg-amber-50/50 ' + (expanded === a.path ? 'bg-amber-50/60' : 'bg-white')}>
+            <td className="px-3 py-2"><div className="flex items-center gap-2"><${KindIcon} path=${a.path} className="text-stone-400" />
+              <div className="min-w-0"><div className="font-medium">${a.title} <${StateBadge} art=${a} /></div>
+              <div className="font-mono text-xs text-stone-400">${a.path}</div></div></div></td>
+            <td className="whitespace-nowrap px-3 py-2 text-stone-600" title=${fullDate(a.updated)}>${ago(a.updated)}</td>
+            <td className="px-3 py-2 text-stone-600">${a.publisher}</td>
+            <td className="whitespace-nowrap px-3 py-2 text-right text-stone-600">${fmtSize(a.size)}<div className="text-xs text-stone-400">${a.files} file${a.files === 1 ? '' : 's'}</div></td>
+            <td className="whitespace-nowrap px-3 py-2 text-right" onClick=${(e) => e.stopPropagation()}>
+              <button title="Copy link" onClick=${() => copy(urlOf(a.path), setToast)} className="rounded px-2 py-1 hover:bg-stone-200">⧉</button>
+              <a title="Open" href=${urlOf(a.path)} target="_blank" className="rounded px-2 py-1 hover:bg-stone-200">↗</a></td>
+          </tr>
+          ${expanded === a.path && html`<tr className="border-b border-stone-200 bg-amber-50/60"><td colSpan=${5} className="px-10 pb-4 pt-1">
+            <div className="grid grid-cols-[1fr_auto] gap-6 text-sm">
+              <div><div className="text-xs text-stone-400">Description</div>
+                <${EditableText} value=${a.description} placeholder="Add a description…" onSave=${(t) => dispatch({ type: 'desc', path: a.path, text: t })} />
+                <div className="mt-2 text-xs text-stone-500">Created ${fullDate(a.created)} · ${urlOf(a.path)}</div>
+                ${a.state === 'publishing' && html`<div className="mt-2 text-xs text-amber-800">Incomplete publish — publish again or delete.</div>`}</div>
+              <div className="flex flex-col items-end gap-2">
+                <button onClick=${() => setModal({ path: a.path })} className="rounded border border-stone-300 bg-white px-3 py-1">Publish new version…</button>
+                <button onClick=${() => { if (confirm('Delete ' + a.path + ' for everyone, immediately?')) { dispatch({ type: 'delete', path: a.path }); setToast('Deleted'); } }} className="rounded px-3 py-1 text-red-700 hover:bg-red-50">Delete</button></div>
+            </div></td></tr>`}
+        <//>`)}
+      </tbody></table>`}
+    ${modal && html`<${PublishModalB} initialPath=${modal.path} state=${state} dispatch=${dispatch} setToast=${setToast} onClose=${() => setModal(null)} />`}
+  </div>`;
+}
+function ProjectsTableB({ state, dispatch, onPick }) {
+  const projects = allProjects(state);
+  return html`<table className="w-full text-sm"><thead className="border-b border-stone-200 bg-stone-100 text-xs text-stone-500"><tr>
+      <th className="px-4 py-2 text-left font-medium">Project</th><th className="px-4 py-2 text-left font-medium">Description (private)</th><th className="px-4 py-2 text-right font-medium">Artifacts</th></tr></thead>
+    <tbody>${projects.map((p) => {
+      const n = state.artifacts.filter((a) => parsePath(a.path).project === p).length;
+      return html`<tr key=${p} className="border-b border-stone-100 bg-white align-top">
+        <td className="px-4 py-2 font-medium"><button onClick=${() => onPick(p)} className="hover:underline">${p}</button></td>
+        <td className="px-4 py-2"><${EditableText} value=${state.projects[p] || ''} placeholder="Add a description…" onSave=${(t) => dispatch({ type: 'projectDesc', project: p, text: t })} /></td>
+        <td className="px-4 py-2 text-right text-stone-500">${n || 'empty'}</td></tr>`;
+    })}</tbody></table>`;
+}
+function PublishModalB({ initialPath, state, dispatch, setToast, onClose }) {
+  const [path, setPath] = useState(initialPath || '');
+  const [upload, setUpload] = useState(null);
+  const [desc, setDesc] = useState('');
+  const [noOverwrite, setNoOverwrite] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [result, setResult] = useState(null);
+  const inp = useRef(), dir = useRef();
+  async function take(entries) {
+    const u = await describeUpload(entries); setUpload(u); setResult(null);
+    if (u && !u.error && !initialPath) {
+      const base = path.includes('/') ? path.slice(0, path.lastIndexOf('/', path.endsWith('/') ? path.length - 2 : path.length) + 1) : '';
+      setPath(base + u.suggested + (u.kind === 'bundle' ? '/' : '.html'));
+    }
+  }
+  const pathErr = path && (validatePath(path) || checkConflicts(state.artifacts, path));
+  const exists = state.artifacts.some((a) => a.path === path);
+  async function go() {
+    if (noOverwrite && exists) return setResult({ error: { code: 'exists', message: '412 — an Artifact already exists at this path.' } });
+    setProgress(0);
+    const r = await simulatePublish(state, dispatch, { path, upload, description: desc || undefined }, setProgress);
+    setProgress(null); setResult(r);
+    if (!r.error) { setToast((r.status === 201 ? 'Published → ' : 'Replaced → ') + r.body.url); onClose(); }
+  }
+  return html`<div className="fixed inset-0 z-40 flex items-start justify-center bg-stone-900/40 pt-24" onClick=${onClose}>
+    <div className="w-[36rem] rounded-xl bg-white p-5 shadow-2xl" onClick=${(e) => e.stopPropagation()}>
+      <h2 className="text-lg font-semibold">${initialPath ? 'Publish new version' : 'Publish'}</h2>
+      <label className="mt-4 block text-xs font-medium text-stone-500">Target path</label>
+      <div className="flex items-center rounded border border-stone-300 font-mono text-sm"><span className="pl-2 text-stone-400">pub.bdgn.me/</span>
+        <input value=${path} disabled=${!!initialPath} onChange=${(e) => setPath(e.target.value)} placeholder="xform/notes/plan.html  or  xform/site/" className="flex-1 bg-transparent px-1 py-1.5 outline-none disabled:text-stone-500" /></div>
+      <div className=${'mt-1 min-h-4 text-xs ' + (pathErr ? 'text-red-700' : 'text-stone-500')}>${pathErr ? html`<code>${pathErr.code}</code> — ${pathErr.message}` : exists ? 'Replaces the existing Artifact in place.' : path ? 'New Artifact.' : ''}</div>
+      <div onDragOver=${(e) => e.preventDefault()} onDrop=${async (e) => { e.preventDefault(); take(await filesFromDataTransfer(e.dataTransfer)); }}
+        className="mt-3 rounded-lg border-2 border-dashed border-stone-300 p-4 text-center text-sm text-stone-500">
+        ${upload && !upload.error ? html`<span className="text-stone-800">${upload.kind === 'bundle' ? 'Bundle' : 'File'} · ${upload.count} file(s) · ${fmtSize(upload.size)}${upload.title ? ' · “' + upload.title + '”' : ''}</span>
+          ${upload.skipped.length > 0 && html`<div className="text-amber-700">${upload.skipped.length} dot-file(s) skipped</div>`}`
+          : upload?.error ? html`<span className="text-red-700"><code>${upload.error.code}</code> — ${upload.error.message}</span>`
+          : html`Drop a file or folder, or <button className="underline" onClick=${() => inp.current.click()}>file</button> / <button className="underline" onClick=${() => dir.current.click()}>folder</button>`}
+        <input ref=${inp} type="file" accept=".html,.htm" className="hidden" onChange=${(e) => take(filesFromList(e.target.files))} />
+        <input ref=${dir} type="file" webkitdirectory="" className="hidden" onChange=${(e) => take(filesFromList(e.target.files))} /></div>
+      <label className="mt-3 block text-xs font-medium text-stone-500">Description <span className="font-normal">(optional; empty keeps the current one)</span></label>
+      <textarea value=${desc} maxLength=${1000} onChange=${(e) => setDesc(e.target.value)} rows=${2} className="w-full rounded border border-stone-300 p-1.5 text-sm"></textarea>
+      <label className="mt-2 flex items-center gap-2 text-sm text-stone-600"><input type="checkbox" checked=${noOverwrite} onChange=${(e) => setNoOverwrite(e.target.checked)} /> Don't overwrite an existing Artifact</label>
+      ${progress !== null && html`<div className="mt-3 h-1.5 overflow-hidden rounded bg-stone-200"><div className="h-full bg-stone-900 transition-all" style=${{ width: progress + '%' }}></div></div>`}
+      ${result?.error && html`<div className="mt-3 rounded bg-red-50 p-2 text-sm text-red-800"><code>${result.error.code}</code> — ${result.error.message}</div>`}
+      <div className="mt-4 flex justify-end gap-2">
+        <button onClick=${onClose} className="px-3 py-1.5 text-sm text-stone-500">Cancel</button>
+        <button disabled=${!upload || !!upload.error || !!pathErr || !path || progress !== null} onClick=${go} className="rounded bg-stone-900 px-4 py-1.5 text-sm text-white disabled:opacity-40">${result?.error?.retryable ? 'Retry' : 'Publish'}</button></div>
+    </div></div>`;
+}
+
+// ═════════════════════════ VARIANT C — Search + Preview (find first) ═════════════════════════
+function VariantC({ state, dispatch }) {
+  const [toast, setToast] = useToast();
+  const [q, setQ] = useState('');
+  const [cursor, setCursor] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [dropping, setDropping] = useState(false);
+  const [pending, setPending] = useState(null); // {upload, path, desc, progress, result}
+  const searchRef = useRef();
+  const ql = q.trim().toLowerCase();
+  const results = useMemo(() => state.artifacts
+    .filter((a) => !ql || (a.path + ' ' + a.title + ' ' + a.description + ' ' + a.publisher).toLowerCase().includes(ql))
+    .sort((a, b) => b.updated.localeCompare(a.updated)), [state, ql]);
+  const cur = results[Math.min(cursor, results.length - 1)];
+  const projectMatch = allProjects(state).find((p) => ql === p || ql === p + '/');
+  useEffect(() => { setCursor(0); }, [ql]);
+  useEffect(() => { setConfirmDel(false); setEditing(false); }, [cur?.path]);
+  useEffect(() => {
+    const k = (e) => {
+      const inField = e.target.closest('input,textarea,[contenteditable]');
+      if (e.key === '/' && !inField) { e.preventDefault(); searchRef.current.focus(); }
+      if (e.key === 'ArrowDown' && (!inField || e.target === searchRef.current)) { e.preventDefault(); setCursor((c) => Math.min(c + 1, results.length - 1)); }
+      if (e.key === 'ArrowUp' && (!inField || e.target === searchRef.current)) { e.preventDefault(); setCursor((c) => Math.max(c - 1, 0)); }
+      if (e.key === 'Enter' && e.target === searchRef.current && cur) window.open(urlOf(cur.path), '_blank');
+    };
+    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k);
+  }, [results, cur]);
+  function bucket(iso) {
+    const days = (Date.now() - new Date(iso)) / 86400000;
+    return days < 1 ? 'Today' : days < 2 ? 'Yesterday' : days < 7 ? 'This week' : days < 31 ? 'This month' : 'Older';
+  }
+  const pickFile = useRef(), pickDir = useRef();
+  async function onDrop(e) {
+    e.preventDefault(); setDropping(false);
+    startPending(await filesFromDataTransfer(e.dataTransfer));
+  }
+  async function startPending(entries) {
+    const u = await describeUpload(entries);
+    if (!u) return;
+    const base = projectMatch ? projectMatch + '/' : cur ? cur.path.slice(0, cur.path.replace(/\/$/, '').lastIndexOf('/') + 1) : '';
+    setPending({ upload: u, path: u.error ? '' : base + u.suggested + (u.kind === 'bundle' ? '/' : '.html'), desc: '', progress: null, result: null });
+  }
+  async function publishPending() {
+    setPending((p) => ({ ...p, progress: 0, result: null }));
+    const r = await simulatePublish(state, dispatch, { path: pending.path, upload: pending.upload, description: pending.desc || undefined }, (v) => setPending((p) => ({ ...p, progress: v })));
+    if (r.error) return setPending((p) => ({ ...p, progress: null, result: r }));
+    setPending(null); setQ(''); setToast((r.status === 201 ? 'Published ' : 'Replaced ') + r.body.url);
+  }
+  let lastBucket = null;
+  const pendErr = pending && pending.path && !pending.upload.error && (validatePath(pending.path) || checkConflicts(state.artifacts, pending.path));
+  return html`<div className="flex h-screen bg-stone-900 text-stone-100"
+      onDragOver=${(e) => { e.preventDefault(); setDropping(true); }} onDragLeave=${(e) => { if (!e.relatedTarget) setDropping(false); }} onDrop=${onDrop}>
+    ${toast}
+    <aside className="flex w-[26rem] shrink-0 flex-col border-r border-stone-800">
+      <div className="p-4">
+        <div className="mb-3 flex items-center text-sm"><span className="font-semibold">pub-hub</span><span className="ml-auto text-stone-500">${ME}</span></div>
+        <input ref=${searchRef} value=${q} onChange=${(e) => setQ(e.target.value)} placeholder="Search Artifacts…  ( / )" autoFocus
+          className="w-full rounded-lg border border-stone-700 bg-stone-800 px-3 py-2.5 text-base outline-none focus:border-amber-500" />
+        <div className="mt-2 text-xs text-stone-500">↑↓ move · Enter open · drop a file or folder anywhere to publish
+          (or pick a <button className="underline" onClick=${() => pickFile.current.click()}>file</button> / <button className="underline" onClick=${() => pickDir.current.click()}>folder</button>)</div>
+        <input ref=${pickFile} type="file" accept=".html,.htm" className="hidden" onChange=${(e) => startPending(filesFromList(e.target.files))} />
+        <input ref=${pickDir} type="file" webkitdirectory="" className="hidden" onChange=${(e) => startPending(filesFromList(e.target.files))} />
+      </div>
+      ${projectMatch && html`<div className="mx-4 mb-2 rounded-lg bg-stone-800 p-3 text-sm">
+        <div className="text-xs uppercase tracking-wide text-stone-500">Project ${projectMatch}</div>
+        <${EditableText} value=${state.projects[projectMatch] || ''} placeholder="Add a Project description…" onSave=${(t) => dispatch({ type: 'projectDesc', project: projectMatch, text: t })} className="text-stone-300" /></div>`}
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+        ${results.map((a, i) => {
+          const b = !ql ? bucket(a.updated) : null;
+          const head = b && b !== lastBucket ? ((lastBucket = b), html`<div className="px-2 pb-1 pt-3 text-xs uppercase tracking-wide text-stone-500">${b}</div>`) : null;
+          return html`<${React.Fragment} key=${a.path}>${head}
+            <button onClick=${() => setCursor(i)} className=${'block w-full rounded-lg px-3 py-2 text-left ' + (cur?.path === a.path ? 'bg-amber-500/15 ring-1 ring-amber-500/40' : 'hover:bg-stone-800')}>
+              <div className="flex items-center gap-2 text-sm"><${KindIcon} path=${a.path} className="text-stone-500" /><span className="truncate font-medium">${a.title}</span>
+                ${a.state === 'publishing' && html`<span className="ml-auto text-[11px] text-amber-400">incomplete</span>`}</div>
+              <div className="truncate pl-6 font-mono text-xs text-stone-500">${a.path}</div></button><//>`;
+        })}
+        ${!results.length && html`<div className="p-6 text-center text-sm text-stone-500">No Artifact matches “${q}”.</div>`}
+      </div>
+    </aside>
+    <main className="flex min-w-0 flex-1 flex-col">
+      ${cur ? html`<div className="flex items-center gap-3 border-b border-stone-800 px-4 py-2 text-sm">
+          <div className="min-w-0"><div className="truncate font-medium">${cur.title}</div>
+            <div className="truncate text-xs text-stone-400">${ago(cur.updated)} by ${cur.publisher} · ${fmtSize(cur.size)} · ${cur.files} file${cur.files === 1 ? '' : 's'} · created ${fullDate(cur.created)}</div></div>
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <button onClick=${() => copy(urlOf(cur.path), setToast)} className="rounded bg-stone-800 px-2.5 py-1 hover:bg-stone-700">Copy link</button>
+            <a href=${urlOf(cur.path)} target="_blank" className="rounded bg-stone-800 px-2.5 py-1 hover:bg-stone-700">Open ↗</a>
+            ${!confirmDel ? html`<button onClick=${() => setConfirmDel(true)} className="rounded px-2.5 py-1 text-red-400 hover:bg-red-500/10">Delete</button>`
+              : html`<button onClick=${() => { dispatch({ type: 'delete', path: cur.path }); setToast('Deleted ' + cur.path); }} className="rounded bg-red-600 px-2.5 py-1 text-white">Confirm delete</button>`}
+          </div></div>
+        <div className="border-b border-stone-800 px-4 py-2 text-sm text-stone-300">
+          ${editing ? html`<${EditableText} value=${cur.description} placeholder="" onSave=${(t) => { dispatch({ type: 'desc', path: cur.path, text: t }); setEditing(false); }} />`
+            : html`<button onClick=${() => setEditing(true)} className="text-left">${cur.description || html`<span className="italic text-stone-500">Add a description…</span>`}</button>`}
+          ${cur.state === 'publishing' && html`<div className="mt-1 text-amber-400">This publish never finished — drop the files again to republish, or delete it.</div>`}</div>
+        <${PreviewFrame} art=${cur} className="min-h-0 w-full flex-1" />`
+      : html`<div className="m-auto text-stone-500">Nothing selected.</div>`}
+    </main>
+    ${dropping && html`<div className="pointer-events-none fixed inset-0 z-30 flex items-center justify-center bg-amber-500/20 text-2xl font-semibold text-amber-100 ring-4 ring-inset ring-amber-400">Drop to publish</div>`}
+    ${pending && html`<div className="fixed inset-0 z-40 flex items-start justify-center bg-black/60 pt-32" onClick=${() => setPending(null)}>
+      <div className="w-[40rem] rounded-xl border border-stone-700 bg-stone-900 p-4 shadow-2xl" onClick=${(e) => e.stopPropagation()}>
+        ${pending.upload.error ? html`<div className="text-red-400"><code>${pending.upload.error.code}</code> — ${pending.upload.error.message}</div>` : html`
+        <div className="mb-2 text-xs text-stone-400">${pending.upload.kind === 'bundle' ? 'Bundle' : 'Single file'} · ${pending.upload.count} file(s) · ${fmtSize(pending.upload.size)}${pending.upload.title ? ' · “' + pending.upload.title + '”' : ''}${pending.upload.skipped.length ? ' · ' + pending.upload.skipped.length + ' dot-file(s) skipped' : ''}</div>
+        <div className="flex items-center rounded-lg border border-stone-700 bg-stone-800 font-mono">
+          <span className="pl-3 text-stone-500">pub.bdgn.me/</span>
+          <input autoFocus value=${pending.path} onChange=${(e) => setPending({ ...pending, path: e.target.value })} onKeyDown=${(e) => e.key === 'Enter' && !pendErr && publishPending()}
+            className="flex-1 bg-transparent px-1 py-2.5 text-lg outline-none" list="c-prefixes" /></div>
+        <datalist id="c-prefixes">${[...new Set(state.artifacts.map((a) => a.path.slice(0, a.path.replace(/\/$/, '').lastIndexOf('/') + 1)))].map((p) => html`<option key=${p} value=${p} />`)}</datalist>
+        <div className=${'mt-1 text-xs ' + (pendErr ? 'text-red-400' : 'text-stone-500')}>${pendErr ? html`<code>${pendErr.code}</code> — ${pendErr.message}` : state.artifacts.some((a) => a.path === pending.path) ? 'Enter replaces the existing Artifact' : 'Enter publishes a new Artifact'}</div>
+        <input value=${pending.desc} onChange=${(e) => setPending({ ...pending, desc: e.target.value })} maxLength=${1000} placeholder="Description (optional)" className="mt-3 w-full rounded border border-stone-700 bg-stone-800 px-2 py-1.5 text-sm outline-none" />
+        ${pending.progress !== null && html`<div className="mt-3 h-1 overflow-hidden rounded bg-stone-700"><div className="h-full bg-amber-500 transition-all" style=${{ width: pending.progress + '%' }}></div></div>`}`}
+        ${pending.result?.error && html`<div className="mt-3 text-sm text-red-400"><code>${pending.result.error.code}</code> — ${pending.result.error.message} ${pending.result.error.retryable && html`<button onClick=${publishPending} className="ml-2 underline">retry</button>`}</div>`}
+      </div></div>`}
+  </div>`;
+}
+
+// ───────────────────────── floating variant switcher (prototype chrome) ─────────────────────────
+const VARIANTS = [
+  { key: 'A', name: 'Explorer', C: VariantA },
+  { key: 'B', name: 'Table', C: VariantB },
+  { key: 'C', name: 'Search + Preview', C: VariantC },
+];
+function Switcher({ current, setCurrent, state, dispatch }) {
+  const [showState, setShowState] = useState(false);
+  const i = VARIANTS.findIndex((v) => v.key === current);
+  const go = useCallback((delta) => setCurrent(VARIANTS[(i + delta + VARIANTS.length) % VARIANTS.length].key), [i]);
+  useEffect(() => {
+    const k = (e) => {
+      if (e.target.closest('input,textarea,[contenteditable]')) return;
+      if (e.key === 'ArrowLeft') go(-1);
+      if (e.key === 'ArrowRight') go(1);
+    };
+    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k);
+  }, [go]);
+  return html`<div>
+    ${showState && html`<div className="fixed bottom-16 left-1/2 z-[60] max-h-[60vh] w-[40rem] -translate-x-1/2 overflow-auto rounded-xl bg-black/90 p-3 font-mono text-[11px] text-lime-300 shadow-2xl">
+      <div className="mb-2 flex items-center gap-2 font-sans text-xs text-stone-300">Next publish outcome:
+        <select value=${state.nextOutcome} onChange=${(e) => dispatch({ type: 'outcome', value: e.target.value })} className="rounded bg-stone-800 px-1 py-0.5">
+          ${['ok', 'busy', 'storage_unavailable', 'shape_conflict_forced'].map((o) => html`<option key=${o}>${o}</option>`)}</select></div>
+      <pre>${JSON.stringify(state, null, 1)}</pre></div>`}
+    <div className="fixed bottom-4 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-1 rounded-full bg-fuchsia-600 px-2 py-1 text-sm font-medium text-white shadow-xl ring-2 ring-white">
+      <button onClick=${() => go(-1)} className="rounded-full px-2 hover:bg-white/20">←</button>
+      <span className="px-2">PROTOTYPE · ${current} (${VARIANTS[i].name})</span>
+      <button onClick=${() => go(1)} className="rounded-full px-2 hover:bg-white/20">→</button>
+      <button onClick=${() => setShowState(!showState)} className="ml-1 rounded-full px-2 font-mono hover:bg-white/20" title="state + debug">{ }</button>
+    </div></div>`;
+}
+function App() {
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const [current, setCur] = useState(() => new URLSearchParams(location.search).get('variant')?.toUpperCase() || 'A');
+  const setCurrent = (v) => { const u = new URL(location.href); u.searchParams.set('variant', v); history.replaceState(null, '', u); setCur(v); };
+  const V = (VARIANTS.find((v) => v.key === current) || VARIANTS[0]).C;
+  return html`<${React.Fragment}><${V} key=${current} state=${state} dispatch=${dispatch} /><${Switcher} current=${current} setCurrent=${setCurrent} state=${state} dispatch=${dispatch} /><//>`;
+}
+createRoot(document.getElementById('root')).render(html`<${App} />`);
+</script>
+</body>
+</html>

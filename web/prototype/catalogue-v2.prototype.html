@@ -1,0 +1,695 @@
+<!doctype html>
+<!--
+  PROTOTYPE v2 — throwaway. "Catalogue UI" (pub-hub map #1, ticket #9), round 2.
+  Round 1 (catalogue.prototype.html: explorer / table / search) didn't fit. The owner pointed at an
+  inventory-style page as inspiration: one wide list grouped by Project, Project descriptions visible
+  without clicks, wide rows carrying the full description. All three variants keep that shape and differ in:
+    A  Inventory            — flat rows per Project, full descriptions; row menu; publish in a side sheet ("Publish here" per Project)
+    B  Categories + expand  — Category sub-headers inside Projects, compact rows that expand in place (preview thumbnail,
+                              actions); drop a file/folder on a Project or Category header to publish there
+    C  Preview drawer       — same wide rows; clicking one opens a right drawer with a live preview and actions;
+                              drop anywhere to publish (over a Project pre-fills its path)
+  Switch via ?variant=A|B|C, the floating bar, or ← / →. In-memory data; mutations are stubs; picked files are read locally.
+  "{ }" on the bar shows state and forces the next publish outcome.
+  Run: xdg-open web/prototype/catalogue-v2.prototype.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pub-hub Catalogue v2 — PROTOTYPE</title>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<style type="text/tailwindcss">
+@theme {
+  --color-canvas: #f6f6f2;
+  --color-line: #e4e6df;
+  --color-brand-50: #eef4ef;
+  --color-brand-100: #dce9df;
+  --color-brand-600: #2f6b50;
+  --color-brand-700: #245a43;
+  --color-brand-900: #173a2c;
+}
+</style>
+</head>
+<body class="bg-canvas text-stone-900 antialiased">
+<div id="root"></div>
+<script type="module">
+import React, { useState, useEffect, useMemo, useRef, useReducer, useCallback } from 'https://esm.sh/react@18.3.1';
+import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
+import htm from 'https://esm.sh/htm@3.1.1';
+const html = htm.bind(React.createElement);
+
+// ───────────────────────── mock data ─────────────────────────
+const PUB = 'https://pub.bdgn.me/';
+const ME = 'owner@bdgn.me';
+const d = (s) => new Date(s).toISOString();
+const initialState = {
+  projects: {
+    'xform': 'Explainers, review notes and UI prototypes for the xform VPN panel.',
+    'pub-hub': 'Design notes, digests and prototypes for this hub.',
+    'sicily-2025': 'The July 2025 trip: itinerary minisite and food notes.',
+    'garden-plans': 'Planting layouts for spring 2027. Nothing published yet.',
+  },
+  artifacts: [
+    { path: 'xform/explanations/auth-seam.html', title: 'How the xform auth seam works', description: 'Walkthrough prepared for the 12 Sep review. Covers the admission assertion header, what the gateway overwrites, and why the panel never sees cookies.', created: d('2026-09-12T10:03'), updated: d('2026-09-26T18:44'), publisher: 'laptop-cli', size: 48213, files: 1, state: 'published' },
+    { path: 'xform/explanations/roster-sync/', title: 'Roster sync, step by step', description: '', created: d('2026-09-02T09:10'), updated: d('2026-09-02T09:10'), publisher: 'agent-desktop', size: 1843220, files: 37, state: 'published' },
+    { path: 'xform/prototypes/panel-redesign/', title: 'Panel redesign — option B', description: 'Clickable prototype, three screens. Built with Vite; the owner prefers this over option A for the presence list.', created: d('2026-08-21T15:30'), updated: d('2026-09-27T08:12'), publisher: 'agent-desktop', size: 612004, files: 14, state: 'published' },
+    { path: 'xform/prototypes/presence-chart.html', title: 'Presence chart sketch', description: 'Quick D3 sketch of online Users over a day.', created: d('2026-09-25T11:00'), updated: d('2026-09-25T11:00'), publisher: ME, size: 20480, files: 1, state: 'published' },
+    { path: 'xform/review-2026-09.html', title: 'September review notes', description: 'Decisions and follow-ups from the September review, compiled from Markdown.', created: d('2026-09-20T17:00'), updated: d('2026-09-21T09:30'), publisher: 'laptop-cli', size: 33120, files: 1, state: 'published' },
+    { path: 'pub-hub/adr-digest.html', title: 'pub-hub ADR digest', description: 'One page summarising ADRs 0001–0004 for a quick read on the phone.', created: d('2026-09-27T12:00'), updated: d('2026-09-27T12:00'), publisher: 'agent-desktop', size: 30311, files: 1, state: 'published' },
+    { path: 'pub-hub/notes/catalogue-ideas.html', title: 'Catalogue ideas', description: 'Agent-written notes on what the Catalogue should show; the publish was interrupted.', created: d('2026-09-27T13:20'), updated: d('2026-09-27T13:21'), publisher: 'agent-desktop', size: 0, files: 0, state: 'publishing' },
+    { path: 'sicily-2025/trip/', title: 'Sicily 2025', description: 'The trip minisite: itinerary, photos and maps. Shared with the family group chat.', created: d('2025-06-30T20:00'), updated: d('2025-07-14T09:00'), publisher: 'laptop-cli', size: 38201930, files: 212, state: 'published' },
+    { path: 'sicily-2025/food/palermo.html', title: 'Where we ate in Palermo', description: '', created: d('2025-07-02T21:40'), updated: d('2025-07-02T21:40'), publisher: 'laptop-cli', size: 91002, files: 1, state: 'published' },
+    { path: 'reading/papers/raft.html', title: 'Raft, annotated', description: 'Paper notes compiled from Markdown, with margin comments on leader election.', created: d('2026-03-11T19:00'), updated: d('2026-04-02T07:45'), publisher: 'laptop-cli', size: 150420, files: 1, state: 'published' },
+    { path: 'reading/papers/dynamo/', title: 'Dynamo paper club', description: 'Slides and reading guide for the paper club session.', created: d('2026-05-05T19:00'), updated: d('2026-05-05T19:00'), publisher: 'laptop-cli', size: 2203004, files: 9, state: 'published' },
+  ],
+  nextOutcome: 'ok', // debug: ok | busy | shape_conflict_forced | storage_unavailable
+};
+
+// ───────────────────────── helpers (shared logic, not layout) ─────────────────────────
+const SEG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+function parsePath(path) {
+  const kind = path.endsWith('/') ? 'bundle' : 'file';
+  const trimmed = kind === 'bundle' ? path.slice(0, -1) : path.replace(/\.html$/, '');
+  const segs = trimmed.split('/');
+  return { kind, project: segs[0], categories: segs.slice(1, -1), name: segs[segs.length - 1], stem: trimmed };
+}
+const urlOf = (path) => PUB + path;
+function validatePath(path) {
+  if (!path) return { code: 'request_invalid', message: 'Enter a target path.' };
+  const isBundle = path.endsWith('/'), isFile = path.endsWith('.html');
+  if (!isBundle && !isFile) return { code: 'path_invalid', message: 'End with .html (single file) or / (Bundle).' };
+  const { stem } = parsePath(path);
+  if (stem.length > 200) return { code: 'name_invalid', message: 'Artifact path is longer than 200 characters.' };
+  const segs = stem.split('/');
+  if (segs.length < 2) return { code: 'name_invalid', message: 'Needs a Project and a name: <project>/<category…>/<name>.' };
+  for (const s of segs) {
+    if (s === 'index') return { code: 'name_reserved', message: '"index" is reserved at every level.' };
+    if (!SEG.test(s) || s.length > 63) return { code: 'name_invalid', message: `"${s}" — use a–z, 0–9 and inner hyphens, 1–63 chars, no dots.` };
+  }
+  return null;
+}
+function checkConflicts(artifacts, path) {
+  const { stem, kind } = parsePath(path);
+  const other = kind === 'bundle' ? stem + '.html' : stem + '/';
+  if (artifacts.some((a) => a.path === other)) return { code: 'shape_conflict', message: `${other} already exists; delete it first to change shape.` };
+  for (const a of artifacts) {
+    if (a.path.endsWith('/') && path.startsWith(a.path) && path !== a.path) return { code: 'nesting_conflict', message: `Would sit inside the Bundle ${a.path}.` };
+    if (kind === 'bundle' && a.path.startsWith(path) && a.path !== path) return { code: 'nesting_conflict', message: `${path} is a Category holding ${a.path}.` };
+  }
+  return null;
+}
+const slug = (s) => s.toLowerCase().replace(/\.html?$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63) || 'untitled';
+function fmtSize(n) {
+  if (!n) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+function ago(iso) {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 90) return 'just now';
+  if (s < 3600) return Math.round(s / 60) + ' min ago';
+  if (s < 86400) return Math.round(s / 3600) + ' h ago';
+  if (s < 86400 * 30) return Math.round(s / 86400) + ' d ago';
+  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+const fullDate = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+function copy(text, setToast) { navigator.clipboard?.writeText(text).catch(() => {}); setToast?.('Copied ' + text); }
+function allProjects(state) {
+  const set = new Set(Object.keys(state.projects));
+  state.artifacts.forEach((a) => set.add(parsePath(a.path).project));
+  return [...set].sort();
+}
+
+// Read picked/dropped files: [{rel, file}] with the top folder stripped for folders.
+async function filesFromDataTransfer(dt) {
+  const out = [];
+  const items = [...(dt.items || [])].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!items.length) return filesFromList(dt.files);
+  async function walk(entry, prefix) {
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej));
+      out.push({ rel: prefix + entry.name, file });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      let batch;
+      do {
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        for (const e of batch) await walk(e, prefix + entry.name + '/');
+      } while (batch.length);
+    }
+  }
+  for (const e of items) await walk(e, '');
+  return out;
+}
+function filesFromList(list) {
+  return [...list].map((f) => ({ rel: f.webkitRelativePath || f.name, file: f }));
+}
+async function describeUpload(entries) {
+  if (!entries.length) return null;
+  const tops = new Set(entries.map((e) => e.rel.split('/')[0]));
+  const isFolder = entries.some((e) => e.rel.includes('/')) && tops.size === 1;
+  let kind, files, suggested;
+  if (isFolder) {
+    const top = [...tops][0];
+    kind = 'bundle';
+    suggested = slug(top);
+    files = entries.map((e) => ({ rel: e.rel.slice(top.length + 1), file: e.file }));
+  } else if (entries.length === 1 && /\.html?$/i.test(entries[0].rel)) {
+    kind = 'file';
+    suggested = slug(entries[0].rel);
+    files = entries;
+  } else {
+    return { error: { code: 'request_invalid', message: 'Drop one .html file or one folder.' } };
+  }
+  const dot = files.filter((f) => f.rel.split('/').some((s) => s.startsWith('.')));
+  files = files.filter((f) => !dot.includes(f));
+  const size = files.reduce((n, f) => n + f.file.size, 0);
+  const entry = kind === 'bundle' ? files.find((f) => f.rel === 'index.html') : files[0];
+  let title = '';
+  if (entry) {
+    const text = await entry.file.slice(0, 64 * 1024).text();
+    title = (text.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').trim();
+  }
+  let error = null;
+  if (kind === 'bundle' && !entry) error = { code: 'index_missing', message: 'The folder has no index.html at its root.' };
+  if (size > 100 * 1024 * 1024) error = { code: 'too_large', message: 'Over the 100 MB limit.' };
+  if (files.length > 2000) error = { code: 'too_many_files', message: 'Over the 2,000-file limit.' };
+  return { kind, suggested, count: files.length, size, skipped: dot.map((f) => f.rel), title, error };
+}
+
+// ───────────────────────── store (in-memory, stubbed API) ─────────────────────────
+function reducer(state, a) {
+  switch (a.type) {
+    case 'delete': return { ...state, artifacts: state.artifacts.filter((x) => x.path !== a.path) };
+    case 'desc': return { ...state, artifacts: state.artifacts.map((x) => (x.path === a.path ? { ...x, description: a.text } : x)) };
+    case 'projectDesc': {
+      const projects = { ...state.projects };
+      if (a.text) projects[a.project] = a.text; else delete projects[a.project];
+      return { ...state, projects };
+    }
+    case 'upsert': {
+      const i = state.artifacts.findIndex((x) => x.path === a.art.path);
+      const artifacts = [...state.artifacts];
+      if (i >= 0) artifacts[i] = { ...artifacts[i], ...a.art, created: artifacts[i].created, description: a.art.description ?? artifacts[i].description };
+      else artifacts.push({ description: '', ...a.art, created: a.art.updated });
+      return { ...state, artifacts };
+    }
+    case 'outcome': return { ...state, nextOutcome: a.value };
+    default: return state;
+  }
+}
+// Simulated PUT /ui/api/artifacts/<path>: validate → progress → result. Returns {status, body} or {error}.
+function simulatePublish(state, dispatch, { path, upload, description }, onProgress) {
+  return new Promise((resolve) => {
+    const bad = validatePath(path) || upload?.error || (state.nextOutcome === 'shape_conflict_forced' ? { code: 'shape_conflict', message: 'Forced from the debug panel.' } : null) || checkConflicts(state.artifacts, path);
+    if (bad) return resolve({ error: bad });
+    if (parsePath(path).kind !== upload.kind) return resolve({ error: { code: 'path_invalid', message: upload.kind === 'bundle' ? 'A folder publishes as a Bundle: end the path with /.' : 'A single file publishes as <name>.html.' } });
+    let p = 0;
+    const t = setInterval(() => {
+      p += 17 + Math.random() * 20;
+      onProgress(Math.min(p, 100));
+      if (p < 100) return;
+      clearInterval(t);
+      if (state.nextOutcome === 'busy') return resolve({ error: { code: 'busy', message: 'Another publish of this Artifact is running. Retry in a few seconds.', retryable: true } });
+      if (state.nextOutcome === 'storage_unavailable') return resolve({ error: { code: 'storage_unavailable', message: 'S3 is unreachable. Retry later.', retryable: true } });
+      const existed = state.artifacts.some((x) => x.path === path);
+      const now = new Date().toISOString();
+      dispatch({ type: 'upsert', art: { path, title: upload.title || parsePath(path).name, description: description === undefined ? undefined : description, updated: now, publisher: ME, size: upload.size, files: upload.count, state: 'published' } });
+      resolve({ status: existed ? 200 : 201, body: { url: urlOf(path) } });
+    }, 220);
+  });
+}
+
+// ───────────────────────── small shared bits ─────────────────────────
+function PreviewFrame({ art, className = '' }) {
+  const doc = `<!doctype html><meta charset=utf-8><body style="font:15px/1.5 system-ui;margin:0;background:#fff">
+    <div style="padding:28px 32px;border-bottom:1px solid #eee;background:linear-gradient(135deg,#fef3c7,#e0e7ff)"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#78716c">${parsePath(art.path).project}</div>
+    <h1 style="margin:6px 0 0;font-size:26px">${art.title.replace(/</g, '&lt;')}</h1></div>
+    <div style="padding:24px 32px;color:#57534e">(stand-in for ${urlOf(art.path)} — the real Catalogue frames the live Artifact from pub.bdgn.me)</div>
+    ${Array.from({ length: 6 }, (_, i) => `<div style="margin:0 32px 12px;height:${10 + (i % 3) * 6}px;border-radius:6px;background:#f5f5f4;width:${90 - i * 9}%"></div>`).join('')}</body>`;
+  return html`<iframe title="preview" sandbox="" srcdoc=${doc} className=${'bg-white ' + className}></iframe>`;
+}
+function StateBadge({ art }) {
+  if (art.state === 'publishing') return html`<span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">incomplete</span>`;
+  return null;
+}
+function KindIcon({ path, className = '' }) {
+  return parsePath(path).kind === 'bundle'
+    ? html`<span title="Bundle" className=${'inline-block w-4 text-center ' + className}>▣</span>`
+    : html`<span title="single file" className=${'inline-block w-4 text-center ' + className}>▭</span>`;
+}
+function useToast() {
+  const [toast, setToast] = useState(null);
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 2200); return () => clearTimeout(t); }, [toast]);
+  const node = toast && html`<div className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-md bg-stone-900 px-3 py-1.5 text-sm text-white shadow-lg">${toast}</div>`;
+  return [node, setToast];
+}
+function EditableText({ value, placeholder, onSave, multiline = true, className = '' }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  if (!editing) return html`<button onClick=${() => setEditing(true)} className=${'group w-full text-left ' + className}>
+      ${value ? html`<span className="whitespace-pre-wrap">${value}</span>` : html`<span className="italic text-stone-400">${placeholder}</span>`}
+      <span className="ml-2 text-xs text-stone-400 opacity-0 group-hover:opacity-100">edit</span></button>`;
+  return html`<div className=${className}>
+    ${multiline
+      ? html`<textarea autoFocus maxLength=${1000} value=${draft} onChange=${(e) => setDraft(e.target.value)} rows=${3} className="w-full rounded border border-stone-300 bg-white p-2 text-sm"></textarea>`
+      : html`<input autoFocus maxLength=${1000} value=${draft} onChange=${(e) => setDraft(e.target.value)} className="w-full rounded border border-stone-300 bg-white p-1.5 text-sm" />`}
+    <div className="mt-1 flex items-center gap-2 text-xs">
+      <button className="rounded bg-stone-900 px-2 py-1 text-white" onClick=${() => { onSave(draft.trim()); setEditing(false); }}>Save</button>
+      <button className="px-2 py-1 text-stone-500" onClick=${() => { setDraft(value); setEditing(false); }}>Cancel</button>
+      <span className="ml-auto text-stone-400">${draft.length}/1000 · private, never shown to Readers</span>
+    </div></div>`;
+}
+
+// ═════════════════════════ v2 shared page pieces (inventory family) ═════════════════════════
+const svg = (d, cls = 'h-4 w-4') => html`<svg viewBox="0 0 24 24" className=${cls} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d=${d} /></svg>`;
+const Icon = {
+  folder: svg('M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z'),
+  chevron: svg('M6 9l6 6 6-6'),
+  chevronR: svg('M9 6l6 6-6 6'),
+  lock: svg('M7 11V8a5 5 0 0 1 10 0v3M6 11h12v9H6z', 'h-3.5 w-3.5'),
+  search: svg('M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14zM20 20l-3.5-3.5'),
+  open: svg('M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5'),
+  copy: svg('M9 9h10v11H9zM5 15V4h10'),
+  dots: svg('M5 12h.01M12 12h.01M19 12h.01', 'h-4 w-4'),
+  plus: svg('M12 5v14M5 12h14'),
+  x: svg('M6 6l12 12M18 6L6 18'),
+  file: svg('M7 3h7l5 5v13H7zM14 3v5h5'),
+  bundle: svg('M4 7l8-4 8 4-8 4zM4 7v10l8 4 8-4V7M12 11v10'),
+};
+const shortDate = (iso) => { const t = new Date(iso); const same = t.getFullYear() === new Date().getFullYear(); return t.toLocaleDateString(undefined, same ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' }); };
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+function filterGroups(state, q, onlyIncomplete) {
+  const ql = q.trim().toLowerCase();
+  return allProjects(state).map((p) => {
+    const desc = state.projects[p] || '';
+    const projHit = !ql || (p + ' ' + desc).toLowerCase().includes(ql);
+    let arts = state.artifacts.filter((a) => parsePath(a.path).project === p);
+    const total = arts.length;
+    if (onlyIncomplete) arts = arts.filter((a) => a.state === 'publishing');
+    if (ql && !projHit) arts = arts.filter((a) => (a.path + ' ' + a.title + ' ' + a.description + ' ' + a.publisher).toLowerCase().includes(ql));
+    arts.sort((a, b) => b.updated.localeCompare(a.updated));
+    const latest = state.artifacts.filter((a) => parsePath(a.path).project === p).reduce((m, a) => (a.updated > m ? a.updated : m), '');
+    return { project: p, desc, arts, total, latest, visible: onlyIncomplete ? arts.length > 0 : projHit || arts.length > 0 };
+  }).filter((g) => g.visible)
+    .sort((a, b) => (!a.total - !b.total) || b.latest.localeCompare(a.latest)); // most recently active first, empty Projects last
+}
+
+function TopBar({ state }) {
+  const total = state.artifacts.reduce((n, a) => n + a.size, 0);
+  return html`<header className="border-b border-line bg-white">
+    <div className="mx-auto flex max-w-6xl items-center gap-4 px-8 py-3.5">
+      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-700 font-serif text-lg leading-none text-white">p</div>
+      <span className="text-lg font-semibold tracking-tight">pub-hub</span>
+      <span className="h-5 border-l border-line"></span>
+      <span className="flex items-center gap-1.5 text-sm text-stone-500">${Icon.lock} Private Catalogue</span>
+      <span className="ml-auto text-sm text-stone-500"><b className="font-semibold text-stone-800">${fmtSize(total)}</b> in ${plural(state.artifacts.length, 'Artifact')}</span>
+      <span className="h-5 border-l border-line"></span>
+      <span className="text-sm text-stone-600">${ME}</span>
+      <a href="#" className="text-sm text-stone-500 hover:text-stone-900">Sign out</a>
+    </div></header>`;
+}
+function Hero({ state, onPublish }) {
+  return html`<div className="flex items-end gap-4">
+    <div>
+      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-700">Catalogue</div>
+      <h1 className="mt-2 flex items-center gap-3 text-4xl font-semibold tracking-tight text-stone-900">Published Artifacts
+        <span className="rounded-md border border-line bg-white px-2 py-0.5 text-sm font-medium text-stone-500">${state.artifacts.length}</span></h1>
+      <p className="mt-2 text-sm text-stone-500">Public at <span className="font-mono">pub.bdgn.me</span>, never indexed or listed.</p>
+    </div>
+    <div className="ml-auto flex flex-col items-end gap-3">
+      ${onPublish && html`<button onClick=${onPublish} className="flex items-center gap-1.5 rounded-lg bg-brand-700 px-3.5 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-900">${Icon.plus} Publish</button>`}
+      <span className="flex items-center gap-1.5 text-xs text-stone-500">${Icon.lock} Descriptions are private</span>
+    </div></div>`;
+}
+function Attention({ state, onShow }) {
+  const n = state.artifacts.filter((a) => a.state === 'publishing').length;
+  if (!n) return null;
+  return html`<div className="mt-6 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-2.5 text-sm text-amber-900">
+    <span className="h-1.5 w-1.5 rounded-full bg-amber-500"></span>${plural(n, 'Artifact')} didn't finish publishing — publish again or delete
+    <button onClick=${onShow} className="ml-auto flex items-center gap-1 text-amber-900 hover:underline">Show ${Icon.chevronR}</button></div>`;
+}
+function Toolbar({ q, setQ, only, setOnly, state, groups }) {
+  const ref = useRef();
+  useEffect(() => {
+    const k = (e) => { if (e.key === '/' && !e.target.closest('input,textarea')) { e.preventDefault(); ref.current.focus(); } };
+    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k);
+  }, []);
+  const inc = state.artifacts.filter((a) => a.state === 'publishing').length;
+  const chip = (on, label, n, fn) => html`<button onClick=${fn} className=${'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm ' + (on ? 'border border-brand-100 bg-brand-50 text-brand-900' : 'text-stone-500 hover:text-stone-800')}>${label}<span className="text-xs text-stone-400">${n}</span></button>`;
+  return html`<div className="mt-6 flex items-center gap-4">
+    <label className="flex w-[26rem] items-center gap-2 rounded-lg border border-line bg-white px-3 py-2.5 text-stone-400 focus-within:border-brand-600">
+      ${Icon.search}<input ref=${ref} value=${q} onChange=${(e) => setQ(e.target.value)} placeholder="Search Projects, paths, titles, descriptions…" className="flex-1 bg-transparent text-sm text-stone-800 outline-none placeholder:text-stone-400" />
+      <kbd className="rounded border border-line px-1.5 text-xs text-stone-500">/</kbd></label>
+    ${chip(!only, 'All', state.artifacts.length, () => setOnly(false))}
+    ${chip(only, 'Incomplete', inc, () => setOnly(true))}
+    <span className="ml-auto text-sm text-stone-500">${plural(groups.length, 'Project')}</span></div>`;
+}
+function RowMenu({ items }) {
+  const [open, setOpen] = useState(false);
+  return html`<div className="relative">
+    <button title="More" onClick=${(e) => { e.stopPropagation(); setOpen(!open); }} className="rounded-md border border-line bg-white p-1.5 text-stone-500 hover:text-stone-900">${Icon.dots}</button>
+    ${open && html`<${React.Fragment}>
+      <div className="fixed inset-0 z-20" onClick=${(e) => { e.stopPropagation(); setOpen(false); }}></div>
+      <div className="absolute right-0 z-30 mt-1 w-52 overflow-hidden rounded-lg border border-line bg-white py-1 text-sm shadow-lg">
+        ${items.map((it) => html`<button key=${it.label} onClick=${(e) => { e.stopPropagation(); setOpen(false); it.onClick(); }} className=${'block w-full px-3 py-1.5 text-left hover:bg-canvas ' + (it.danger ? 'text-red-700' : 'text-stone-700')}>${it.label}</button>`)}
+      </div><//>`}
+  </div>`;
+}
+const IconBtn = ({ title, onClick, href, children }) => href
+  ? html`<a title=${title} href=${href} target="_blank" onClick=${(e) => e.stopPropagation()} className="rounded-md border border-line bg-white p-1.5 text-stone-500 hover:text-brand-700">${children}</a>`
+  : html`<button title=${title} onClick=${(e) => { e.stopPropagation(); onClick(); }} className="rounded-md border border-line bg-white p-1.5 text-stone-500 hover:text-brand-700">${children}</button>`;
+function DeleteConfirm({ art, dispatch, setToast, onCancel }) {
+  return html`<div className="mt-3 flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+    Delete <span className="font-mono">/${art.path}</span> for everyone, immediately? Readers get 404 at once; there is no undo.
+    <button onClick=${() => { dispatch({ type: 'delete', path: art.path }); setToast('Deleted /' + art.path); }} className="ml-auto rounded-md bg-red-700 px-2.5 py-1 text-white">Delete</button>
+    <button onClick=${onCancel} className="text-red-900/70 hover:text-red-900">Cancel</button></div>`;
+}
+const Desc = ({ art, dispatch, className = '' }) => html`<${EditableText} value=${art.description} placeholder="No private description — click to add" className=${className}
+  onSave=${(t) => dispatch({ type: 'desc', path: art.path, text: t })} />`;
+const ProjectDesc = ({ project, state, dispatch, className = '' }) => html`<${EditableText} value=${state.projects[project] || ''} multiline=${false} placeholder="Add a Project description…" className=${className}
+  onSave=${(t) => dispatch({ type: 'projectDesc', project, text: t })} />`;
+const Incomplete = () => html`<span className="rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">● Incomplete</span>`;
+
+// Publish form used by all three variants (they differ in WHERE it opens, not in its fields).
+function PublishPanel({ state, dispatch, setToast, prefix = '', fixedPath, entries, onDone, onCancel }) {
+  const [upload, setUpload] = useState(null);
+  const [path, setPath] = useState(fixedPath || '');
+  const [desc, setDesc] = useState('');
+  const [noOverwrite, setNoOverwrite] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [result, setResult] = useState(null);
+  const [over, setOver] = useState(false);
+  const fileIn = useRef(), dirIn = useRef();
+  async function take(list) {
+    const u = await describeUpload(list); setUpload(u); setResult(null);
+    if (u && !u.error && !fixedPath) setPath(prefix + u.suggested + (u.kind === 'bundle' ? '/' : '.html'));
+  }
+  useEffect(() => { if (entries) take(entries); }, []);
+  const pathErr = upload && !upload.error && path && (validatePath(path) || checkConflicts(state.artifacts, path));
+  const exists = state.artifacts.some((a) => a.path === path);
+  async function go() {
+    if (noOverwrite && exists) return setResult({ error: { code: 'exists', message: 'An Artifact already exists at this path (412).' } });
+    setProgress(0); setResult(null);
+    const r = await simulatePublish(state, dispatch, { path, upload, description: desc || undefined }, setProgress);
+    setProgress(null); setResult(r);
+    if (!r.error) { setToast((r.status === 201 ? 'Published ' : 'Replaced ') + r.body.url); onDone?.(path); }
+  }
+  const pickers = html`<button className="underline decoration-stone-300 underline-offset-2 hover:text-brand-700" onClick=${() => fileIn.current.click()}>choose a file</button> or <button className="underline decoration-stone-300 underline-offset-2 hover:text-brand-700" onClick=${() => dirIn.current.click()}>a folder</button>
+    <input ref=${fileIn} type="file" accept=".html,.htm" className="hidden" onChange=${(e) => take(filesFromList(e.target.files))} />
+    <input ref=${dirIn} type="file" webkitdirectory="" className="hidden" onChange=${(e) => take(filesFromList(e.target.files))} />`;
+  return html`<div className="text-sm">
+    ${!upload || upload.error ? html`<div onDragOver=${(e) => { e.preventDefault(); e.stopPropagation(); setOver(true); }} onDragLeave=${() => setOver(false)}
+        onDrop=${async (e) => { e.preventDefault(); e.stopPropagation(); setOver(false); take(await filesFromDataTransfer(e.dataTransfer)); }}
+        className=${'rounded-lg border-2 border-dashed px-4 py-6 text-center ' + (over ? 'border-brand-600 bg-brand-50' : 'border-line bg-white text-stone-500')}>
+      Drop an <b className="text-stone-700">.html</b> file or a <b className="text-stone-700">folder</b>${fixedPath ? html` to replace <span className="font-mono">/${fixedPath}</span>` : prefix ? html` into <span className="font-mono">/${prefix}</span>` : ''} — or ${pickers}
+      ${upload?.error && html`<div className="mt-2 text-red-700"><code>${upload.error.code}</code> — ${upload.error.message}</div>`}</div>`
+    : html`<div className="rounded-lg border border-line bg-white p-4">
+      <div className="flex items-center gap-2 text-stone-600">${upload.kind === 'bundle' ? Icon.bundle : Icon.file}
+        ${upload.kind === 'bundle' ? 'Bundle' : 'Single file'} · ${plural(upload.count, 'file')} · ${fmtSize(upload.size)}${upload.title ? html` · <span className="text-stone-900">“${upload.title}”</span>` : ' · no <title>'}
+        <button onClick=${() => setUpload(null)} className="ml-auto text-xs text-stone-400 hover:text-stone-700">change</button></div>
+      ${upload.skipped.length > 0 && html`<div className="mt-1 text-xs text-amber-800">Skipping ${plural(upload.skipped.length, 'dot-file')}: ${upload.skipped.slice(0, 4).join(', ')}${upload.skipped.length > 4 ? '…' : ''}</div>`}
+      <label className="mt-3 block text-xs font-medium text-stone-500">Path</label>
+      <div className="flex items-center rounded-md border border-line font-mono focus-within:border-brand-600"><span className="pl-2.5 text-stone-400">pub.bdgn.me/</span>
+        <input value=${path} disabled=${!!fixedPath} onChange=${(e) => setPath(e.target.value)} className="flex-1 bg-transparent px-1 py-2 outline-none disabled:text-stone-500" /></div>
+      <div className=${'mt-1 text-xs ' + (pathErr ? 'text-red-700' : 'text-stone-500')}>${pathErr ? html`<code>${pathErr.code}</code> — ${pathErr.message}` : exists ? 'Replaces the existing Artifact in place (same URL).' : 'New Artifact.'}</div>
+      <label className="mt-3 block text-xs font-medium text-stone-500">Description <span className="font-normal text-stone-400">— optional, private${exists ? '; leave empty to keep the current one' : ''}</span></label>
+      <textarea value=${desc} maxLength=${1000} onChange=${(e) => setDesc(e.target.value)} rows=${2} className="w-full rounded-md border border-line p-2 outline-none focus:border-brand-600"></textarea>
+      ${!fixedPath && html`<label className="mt-2 flex items-center gap-2 text-stone-600"><input type="checkbox" checked=${noOverwrite} onChange=${(e) => setNoOverwrite(e.target.checked)} /> Don't overwrite an existing Artifact</label>`}
+      ${progress !== null && html`<div className="mt-3 h-1.5 overflow-hidden rounded bg-stone-200"><div className="h-full bg-brand-600 transition-all" style=${{ width: progress + '%' }}></div></div>`}
+      ${result?.error && html`<div className="mt-3 rounded-md bg-red-50 p-2 text-red-800"><code>${result.error.code}</code> — ${result.error.message}${result.error.retryable ? ' (retryable)' : ''}</div>`}
+      <div className="mt-3 flex items-center gap-2">
+        <button disabled=${!!pathErr || !path || progress !== null} onClick=${go} className="rounded-md bg-brand-700 px-3.5 py-1.5 font-medium text-white disabled:opacity-40">${result?.error?.retryable ? 'Retry' : exists ? 'Replace' : 'Publish'}</button>
+        ${onCancel && html`<button onClick=${onCancel} className="px-2 py-1.5 text-stone-500 hover:text-stone-800">Cancel</button>`}</div>
+    </div>`}
+    ${(!upload || upload.error) && onCancel && html`<div className="mt-2 text-right"><button onClick=${onCancel} className="text-stone-500 hover:text-stone-800">Cancel</button></div>`}
+  </div>`;
+}
+function Page({ state, children, wide }) {
+  return html`<div className="min-h-screen bg-canvas text-stone-800"><${TopBar} state=${state} />
+    <main className=${'mx-auto px-8 pb-28 pt-10 ' + (wide ? 'max-w-none' : 'max-w-6xl')}>${children}</main></div>`;
+}
+
+// ═════════════════════════ VARIANT A — Inventory (flat per Project, full descriptions) ═════════════════════════
+function V2A({ state, dispatch }) {
+  const [toast, setToast] = useToast();
+  const [q, setQ] = useState(''); const [only, setOnly] = useState(false);
+  const [collapsed, setCollapsed] = useState({});
+  const [sheet, setSheet] = useState(null); // {prefix} | {fixedPath}
+  const [del, setDel] = useState(null);
+  const groups = filterGroups(state, q, only);
+  return html`<${Page} state=${state}>${toast}
+    <${Hero} state=${state} onPublish=${() => setSheet({ prefix: '' })} />
+    <${Attention} state=${state} onShow=${() => setOnly(true)} />
+    <${Toolbar} q=${q} setQ=${setQ} only=${only} setOnly=${setOnly} state=${state} groups=${groups} />
+    <div className="mt-4 overflow-hidden rounded-xl border border-line bg-white">
+      <div className="grid grid-cols-[minmax(0,1fr)_8rem_6.5rem_7.5rem] gap-6 px-6 py-3 text-xs text-stone-500">
+        <span>Artifact</span><span>Updated</span><span className="text-right">Size</span><span></span></div>
+      ${groups.map((g) => html`<section key=${g.project}>
+        <div className="flex items-start gap-3 border-t border-line bg-brand-50/50 px-6 py-3">
+          <button onClick=${() => setCollapsed({ ...collapsed, [g.project]: !collapsed[g.project] })} className=${'mt-0.5 text-stone-400 transition ' + (collapsed[g.project] ? '-rotate-90' : '')}>${Icon.chevron}</button>
+          <span className="mt-0.5 text-stone-500">${Icon.folder}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline gap-2"><span className="font-semibold text-stone-900">${g.project}</span><span className="font-mono text-xs text-stone-500">/${g.project}/</span></div>
+            <${ProjectDesc} project=${g.project} state=${state} dispatch=${dispatch} className="text-sm text-stone-600" /></div>
+          <span className="mt-0.5 text-xs text-stone-500">${plural(g.total, 'Artifact')}</span>
+          <button onClick=${() => setSheet({ prefix: g.project + '/' })} className="flex items-center gap-1 rounded-md px-2 py-0.5 text-xs text-brand-700 hover:bg-brand-100">${Icon.plus} Publish here</button>
+        </div>
+        ${!collapsed[g.project] && (g.arts.length ? g.arts.map((a) => html`<div key=${a.path} className="border-t border-line px-6 py-4 hover:bg-canvas/50">
+          <div className="grid grid-cols-[minmax(0,1fr)_8rem_6.5rem_7.5rem] gap-6">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2"><span className="font-semibold text-stone-900">${a.title}</span>${a.state === 'publishing' && html`<${Incomplete} />`}</div>
+              <a href=${urlOf(a.path)} target="_blank" className="mt-0.5 inline-block font-mono text-xs text-stone-500 underline decoration-stone-300 underline-offset-4 hover:text-brand-700">/${a.path}</a>
+              <${Desc} art=${a} dispatch=${dispatch} className="mt-2 text-[15px] leading-relaxed text-stone-600" />
+            </div>
+            <div className="text-sm text-stone-600" title=${'created ' + fullDate(a.created)}>${shortDate(a.updated)}<div className="text-xs text-stone-400">by ${a.publisher}</div></div>
+            <div className="text-right font-mono text-xs text-stone-600">${fmtSize(a.size)}<div className="text-stone-400">${plural(a.files, 'file')}</div></div>
+            <div className="flex items-start justify-end gap-1.5">
+              <${IconBtn} title="Copy link" onClick=${() => copy(urlOf(a.path), setToast)}>${Icon.copy}<//>
+              <${IconBtn} title="Open" href=${urlOf(a.path)}>${Icon.open}<//>
+              <${RowMenu} items=${[{ label: 'Publish new version…', onClick: () => setSheet({ fixedPath: a.path }) }, { label: 'Delete…', danger: true, onClick: () => setDel(a.path) }]} />
+            </div>
+          </div>
+          ${del === a.path && html`<${DeleteConfirm} art=${a} dispatch=${dispatch} setToast=${setToast} onCancel=${() => setDel(null)} />`}
+        </div>`) : html`<div className="border-t border-line px-6 py-5 pl-16 text-sm text-stone-500">No Artifacts in this Project yet.</div>`)}
+      </section>`)}
+    </div>
+    ${sheet && html`<div className="fixed inset-0 z-40 bg-stone-900/30" onClick=${() => setSheet(null)}>
+      <aside className="absolute inset-y-0 right-0 w-[34rem] overflow-y-auto bg-canvas p-6 shadow-2xl" onClick=${(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center"><h2 className="text-xl font-semibold tracking-tight">${sheet.fixedPath ? 'Publish new version' : 'Publish'}</h2>
+          <button onClick=${() => setSheet(null)} className="ml-auto text-stone-400 hover:text-stone-800">${Icon.x}</button></div>
+        <${PublishPanel} state=${state} dispatch=${dispatch} setToast=${setToast} prefix=${sheet.prefix || ''} fixedPath=${sheet.fixedPath} onDone=${() => setSheet(null)} />
+      </aside></div>`}
+  <//>`;
+}
+
+// ═════════════════════════ VARIANT B — Inventory with Category sub-groups, rows expand ═════════════════════════
+function V2B({ state, dispatch }) {
+  const [toast, setToast] = useToast();
+  const [q, setQ] = useState(''); const [only, setOnly] = useState(false);
+  const [open, setOpen] = useState(null);
+  const [del, setDel] = useState(null);
+  const [republish, setRepublish] = useState(null);
+  const [drop, setDrop] = useState(null); // {prefix, entries}
+  const [hover, setHover] = useState(null);
+  const groups = filterGroups(state, q, only);
+  const dropProps = (prefix) => ({
+    onDragOver: (e) => { e.preventDefault(); setHover(prefix); },
+    onDragLeave: () => setHover(null),
+    onDrop: async (e) => { e.preventDefault(); setHover(null); setDrop({ prefix, entries: await filesFromDataTransfer(e.dataTransfer) }); },
+  });
+  const inlinePublish = (prefix) => drop && drop.prefix === prefix && html`<div className="border-t border-line bg-brand-50/40 px-6 py-4">
+    <${PublishPanel} key=${prefix + (drop.entries ? 'd' : 'n')} state=${state} dispatch=${dispatch} setToast=${setToast} prefix=${prefix} entries=${drop.entries} onDone=${(p) => { setDrop(null); setOpen(p); }} onCancel=${() => setDrop(null)} /></div>`;
+  function Row(a, indent) {
+    const isOpen = open === a.path;
+    return html`<div key=${a.path} className=${'border-t border-line ' + (isOpen ? 'bg-canvas/60' : 'hover:bg-canvas/40')}>
+      <button onClick=${() => setOpen(isOpen ? null : a.path)} className=${'grid w-full grid-cols-[minmax(0,1fr)_7rem_6rem_1.5rem] items-start gap-5 py-3 pr-6 text-left ' + indent}>
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2"><span className="shrink-0 self-center text-stone-400">${parsePath(a.path).kind === 'bundle' ? Icon.bundle : Icon.file}</span>
+            <span className="truncate font-medium text-stone-900">${a.title}</span>${a.state === 'publishing' && html`<${Incomplete} />`}
+            <span className="truncate font-mono text-xs text-stone-400">${parsePath(a.path).name}${parsePath(a.path).kind === 'bundle' ? '/' : '.html'}</span></div>
+          <div className=${'mt-0.5 pl-6 text-sm text-stone-500 ' + (isOpen ? 'hidden' : 'line-clamp-1')}>${a.description || html`<i className="text-stone-400">No private description</i>`}</div>
+        </div>
+        <span className="text-sm text-stone-600">${shortDate(a.updated)}</span>
+        <span className="text-right font-mono text-xs text-stone-500">${fmtSize(a.size)}</span>
+        <span className=${'text-stone-400 transition ' + (isOpen ? 'rotate-180' : '')}>${Icon.chevron}</span>
+      </button>
+      ${isOpen && html`<div className=${'grid grid-cols-[18rem_minmax(0,1fr)] gap-6 pb-5 pr-6 ' + indent}>
+        <div className="relative h-[180px] w-[288px] overflow-hidden rounded-lg border border-line bg-white">
+          <div style=${{ transform: 'scale(0.225)', transformOrigin: '0 0', width: 1280, height: 800 }}><${PreviewFrame} art=${a} className="h-full w-full" /></div>
+          <a href=${urlOf(a.path)} target="_blank" className="absolute inset-0" title="Open"></a></div>
+        <div className="min-w-0 text-sm">
+          <div className="flex items-center gap-2"><a href=${urlOf(a.path)} target="_blank" className="truncate font-mono text-xs text-brand-700 underline underline-offset-4">${urlOf(a.path)}</a>
+            <${IconBtn} title="Copy link" onClick=${() => copy(urlOf(a.path), setToast)}>${Icon.copy}<//><${IconBtn} title="Open" href=${urlOf(a.path)}>${Icon.open}<//></div>
+          <${Desc} art=${a} dispatch=${dispatch} className="mt-3 text-[15px] leading-relaxed text-stone-700" />
+          <div className="mt-3 text-xs text-stone-500">Updated ${fullDate(a.updated)} by ${a.publisher} · created ${fullDate(a.created)} · ${plural(a.files, 'file')}, ${fmtSize(a.size)}</div>
+          ${a.state === 'publishing' && html`<div className="mt-2 text-xs text-amber-800">This publish never finished. Readers may see a mix of old and new files until it is published again.</div>`}
+          <div className="mt-3 flex gap-2">
+            <button onClick=${() => setRepublish(republish === a.path ? null : a.path)} className="rounded-md border border-line bg-white px-2.5 py-1 hover:border-brand-600">Publish new version</button>
+            <button onClick=${() => setDel(a.path)} className="rounded-md px-2.5 py-1 text-red-700 hover:bg-red-50">Delete</button></div>
+          ${del === a.path && html`<${DeleteConfirm} art=${a} dispatch=${dispatch} setToast=${setToast} onCancel=${() => setDel(null)} />`}
+          ${republish === a.path && html`<div className="mt-3"><${PublishPanel} state=${state} dispatch=${dispatch} setToast=${setToast} fixedPath=${a.path} onDone=${() => setRepublish(null)} onCancel=${() => setRepublish(null)} /></div>`}
+        </div></div>`}
+    </div>`;
+  }
+  return html`<${Page} state=${state}>${toast}
+    <${Hero} state=${state} onPublish=${() => setDrop({ prefix: '' })} />
+    <${Attention} state=${state} onShow=${() => setOnly(true)} />
+    <${Toolbar} q=${q} setQ=${setQ} only=${only} setOnly=${setOnly} state=${state} groups=${groups} />
+    <div className="mt-4 overflow-hidden rounded-xl border border-line bg-white">
+      ${inlinePublish('')}
+      ${groups.map((g) => {
+        const byCat = {};
+        for (const a of g.arts) { const c = parsePath(a.path).categories.join('/'); (byCat[c] ??= []).push(a); }
+        const cats = Object.keys(byCat).sort();
+        return html`<section key=${g.project}>
+          <div ...${dropProps(g.project + '/')} className=${'flex items-start gap-3 border-t border-line px-6 py-3 ' + (hover === g.project + '/' ? 'bg-brand-100 ring-2 ring-inset ring-brand-600' : 'bg-brand-50/50')}>
+            <span className="mt-0.5 text-stone-500">${Icon.folder}</span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline gap-2"><span className="font-semibold text-stone-900">${g.project}</span><span className="font-mono text-xs text-stone-500">/${g.project}/</span>
+                <span className="ml-auto text-xs text-stone-500">${plural(g.total, 'Artifact')}${hover === g.project + '/' ? ' · drop to publish here' : ''}</span></div>
+              <${ProjectDesc} project=${g.project} state=${state} dispatch=${dispatch} className="text-sm text-stone-600" /></div>
+          </div>
+          ${inlinePublish(g.project + '/')}
+          ${!g.arts.length && html`<div className="border-t border-line px-6 py-4 pl-14 text-sm text-stone-500">No Artifacts yet — drop a file or folder on the Project header to publish.</div>`}
+          ${cats.map((c) => html`<${React.Fragment} key=${c || '_'}>
+            ${c && html`<div ...${dropProps(g.project + '/' + c + '/')} className=${'border-t border-line py-1.5 pl-14 font-mono text-xs ' + (hover === g.project + '/' + c + '/' ? 'bg-brand-100 text-brand-900' : 'text-stone-500')}>${c}/</div>`}
+            ${c && inlinePublish(g.project + '/' + c + '/')}
+            ${byCat[c].map((a) => Row(a, c ? 'pl-20' : 'pl-14'))}
+          <//>`)}
+        </section>`;
+      })}
+    </div>
+    <p className="mt-3 text-xs text-stone-500">Drop a file or folder on a Project or Category header to publish into it.</p>
+  <//>`;
+}
+
+// ═════════════════════════ VARIANT C — Inventory + preview drawer, drop anywhere ═════════════════════════
+function V2C({ state, dispatch }) {
+  const [toast, setToast] = useToast();
+  const [q, setQ] = useState(''); const [only, setOnly] = useState(false);
+  const [sel, setSel] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const [hoverProject, setHoverProject] = useState(null);
+  const [dialog, setDialog] = useState(null); // {prefix, entries?, fixedPath?}
+  const [del, setDel] = useState(false);
+  const groups = filterGroups(state, q, only);
+  const art = state.artifacts.find((a) => a.path === sel);
+  useEffect(() => setDel(false), [sel]);
+  return html`<div className="flex min-h-screen bg-canvas"
+      onDragOver=${(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave=${(e) => { if (!e.relatedTarget) { setDragging(false); setHoverProject(null); } }}
+      onDrop=${async (e) => { e.preventDefault(); const p = hoverProject; setDragging(false); setHoverProject(null); setDialog({ prefix: p ? p + '/' : '', entries: await filesFromDataTransfer(e.dataTransfer) }); }}>
+    ${toast}
+    <div className="min-w-0 flex-1">
+      <${TopBar} state=${state} />
+      <main className=${'mx-auto px-8 pb-28 pt-10 ' + (art ? 'max-w-4xl' : 'max-w-6xl')}>
+        <${Hero} state=${state} onPublish=${() => setDialog({ prefix: '' })} />
+        <${Attention} state=${state} onShow=${() => setOnly(true)} />
+        <${Toolbar} q=${q} setQ=${setQ} only=${only} setOnly=${setOnly} state=${state} groups=${groups} />
+        <div className="mt-4 overflow-hidden rounded-xl border border-line bg-white">
+          ${groups.map((g) => html`<section key=${g.project} onDragEnter=${() => setHoverProject(g.project)}
+              className=${dragging && hoverProject === g.project ? 'relative ring-2 ring-inset ring-brand-600' : ''}>
+            <div className="flex items-start gap-3 border-t border-line bg-brand-50/50 px-6 py-3 first:border-t-0">
+              <span className="mt-0.5 text-stone-500">${Icon.folder}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2"><span className="font-semibold text-stone-900">${g.project}</span><span className="font-mono text-xs text-stone-500">/${g.project}/</span>
+                  <span className="ml-auto text-xs text-stone-500">${dragging && hoverProject === g.project ? html`<b className="text-brand-700">Drop to publish into /${g.project}/</b>` : plural(g.total, 'Artifact')}</span></div>
+                <${ProjectDesc} project=${g.project} state=${state} dispatch=${dispatch} className="text-sm text-stone-600" /></div>
+            </div>
+            ${g.arts.length ? g.arts.map((a) => html`<div key=${a.path} onClick=${() => setSel(sel === a.path ? null : a.path)}
+                className=${'grid cursor-pointer grid-cols-[minmax(0,1fr)_7rem_5.5rem_2rem] gap-5 border-t border-line px-6 py-4 ' + (sel === a.path ? 'bg-brand-50 shadow-[inset_3px_0_0] shadow-brand-600' : 'hover:bg-canvas/60')}>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2"><span className="font-semibold text-stone-900">${a.title}</span>${a.state === 'publishing' && html`<${Incomplete} />`}</div>
+                <div className="mt-0.5 font-mono text-xs text-stone-500">/${a.path}</div>
+                <p className="mt-2 text-[15px] leading-relaxed text-stone-600">${a.description || html`<i className="text-stone-400">No private description</i>`}</p></div>
+              <div className="text-sm text-stone-600">${shortDate(a.updated)}<div className="text-xs text-stone-400">by ${a.publisher}</div></div>
+              <div className="text-right font-mono text-xs text-stone-600">${fmtSize(a.size)}<div className="text-stone-400">${plural(a.files, 'file')}</div></div>
+              <div className="flex items-start justify-end"><${IconBtn} title="Open" href=${urlOf(a.path)}>${Icon.open}<//></div>
+            </div>`) : html`<div className="border-t border-line px-6 py-5 pl-14 text-sm text-stone-500">No Artifacts yet — drop a file or folder here to publish.</div>`}
+          </section>`)}
+        </div>
+        <p className="mt-3 text-xs text-stone-500">Click a row for preview and actions. Drop a file or folder anywhere to publish; dropping over a Project pre-fills its path.</p>
+      </main>
+    </div>
+    ${art && html`<aside className="sticky top-0 flex h-screen w-[40rem] shrink-0 flex-col border-l border-line bg-white">
+      <div className="flex items-start gap-3 border-b border-line p-5">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2"><h2 className="truncate text-lg font-semibold tracking-tight">${art.title}</h2>${art.state === 'publishing' && html`<${Incomplete} />`}</div>
+          <a href=${urlOf(art.path)} target="_blank" className="font-mono text-xs text-brand-700 underline underline-offset-4">${urlOf(art.path)}</a></div>
+        <${IconBtn} title="Copy link" onClick=${() => copy(urlOf(art.path), setToast)}>${Icon.copy}<//>
+        <${IconBtn} title="Open" href=${urlOf(art.path)}>${Icon.open}<//>
+        <button onClick=${() => setSel(null)} className="p-1.5 text-stone-400 hover:text-stone-800">${Icon.x}</button></div>
+      <${PreviewFrame} art=${art} className="min-h-0 w-full flex-1 border-b border-line" />
+      <div className="max-h-[45%] overflow-y-auto p-5 text-sm">
+        <div className="text-xs font-medium text-stone-500">Description</div>
+        <${Desc} art=${art} dispatch=${dispatch} className="mt-1 text-[15px] leading-relaxed text-stone-700" />
+        <dl className="mt-4 grid grid-cols-[6rem_1fr] gap-y-1 text-xs text-stone-600">
+          <dt className="text-stone-400">Updated</dt><dd>${fullDate(art.updated)} by ${art.publisher}</dd>
+          <dt className="text-stone-400">Created</dt><dd>${fullDate(art.created)}</dd>
+          <dt className="text-stone-400">Content</dt><dd>${parsePath(art.path).kind === 'bundle' ? 'Bundle' : 'Single file'} · ${plural(art.files, 'file')} · ${fmtSize(art.size)}</dd></dl>
+        <div className="mt-4 flex gap-2">
+          <button onClick=${() => setDialog({ fixedPath: art.path })} className="rounded-md border border-line px-2.5 py-1 hover:border-brand-600">Publish new version</button>
+          <button onClick=${() => setDel(true)} className="rounded-md px-2.5 py-1 text-red-700 hover:bg-red-50">Delete</button></div>
+        ${del && html`<${DeleteConfirm} art=${art} dispatch=${dispatch} setToast=${(t) => { setToast(t); setSel(null); }} onCancel=${() => setDel(false)} />`}
+      </div></aside>`}
+    ${dragging && html`<div className="pointer-events-none fixed inset-x-0 bottom-20 z-30 flex justify-center"><div className="rounded-full bg-brand-900 px-4 py-2 text-sm text-white shadow-lg">
+      ${hoverProject ? `Drop to publish into /${hoverProject}/` : 'Drop to publish — you will choose the path'}</div></div>`}
+    ${dialog && html`<div className="fixed inset-0 z-40 flex items-start justify-center bg-stone-900/30 pt-24" onClick=${() => setDialog(null)}>
+      <div className="w-[36rem] rounded-xl bg-canvas p-5 shadow-2xl" onClick=${(e) => e.stopPropagation()}>
+        <div className="mb-3 flex items-center"><h2 className="text-lg font-semibold tracking-tight">${dialog.fixedPath ? 'Publish new version' : 'Publish'}</h2>
+          <button onClick=${() => setDialog(null)} className="ml-auto text-stone-400 hover:text-stone-800">${Icon.x}</button></div>
+        <${PublishPanel} state=${state} dispatch=${dispatch} setToast=${setToast} prefix=${dialog.prefix || ''} fixedPath=${dialog.fixedPath} entries=${dialog.entries}
+          onDone=${(p) => { setDialog(null); setSel(p); }} />
+      </div></div>`}
+  </div>`;
+}
+
+const VARIANTS = [
+  { key: 'A', name: 'Inventory', C: V2A },
+  { key: 'B', name: 'Categories + expand', C: V2B },
+  { key: 'C', name: 'Preview drawer', C: V2C },
+];
+
+// ───────────────────────── floating variant switcher (prototype chrome) ─────────────────────────
+
+function Switcher({ current, setCurrent, state, dispatch }) {
+  const [showState, setShowState] = useState(false);
+  const i = VARIANTS.findIndex((v) => v.key === current);
+  const go = useCallback((delta) => setCurrent(VARIANTS[(i + delta + VARIANTS.length) % VARIANTS.length].key), [i]);
+  useEffect(() => {
+    const k = (e) => {
+      if (e.target.closest('input,textarea,[contenteditable]')) return;
+      if (e.key === 'ArrowLeft') go(-1);
+      if (e.key === 'ArrowRight') go(1);
+    };
+    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k);
+  }, [go]);
+  return html`<div>
+    ${showState && html`<div className="fixed bottom-16 left-1/2 z-[60] max-h-[60vh] w-[40rem] -translate-x-1/2 overflow-auto rounded-xl bg-black/90 p-3 font-mono text-[11px] text-lime-300 shadow-2xl">
+      <div className="mb-2 flex items-center gap-2 font-sans text-xs text-stone-300">Next publish outcome:
+        <select value=${state.nextOutcome} onChange=${(e) => dispatch({ type: 'outcome', value: e.target.value })} className="rounded bg-stone-800 px-1 py-0.5">
+          ${['ok', 'busy', 'storage_unavailable', 'shape_conflict_forced'].map((o) => html`<option key=${o}>${o}</option>`)}</select></div>
+      <pre>${JSON.stringify(state, null, 1)}</pre></div>`}
+    <div className="fixed bottom-4 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-1 rounded-full bg-fuchsia-600 px-2 py-1 text-sm font-medium text-white shadow-xl ring-2 ring-white">
+      <button onClick=${() => go(-1)} className="rounded-full px-2 hover:bg-white/20">←</button>
+      <span className="px-2">PROTOTYPE · ${current} (${VARIANTS[i].name})</span>
+      <button onClick=${() => go(1)} className="rounded-full px-2 hover:bg-white/20">→</button>
+      <button onClick=${() => setShowState(!showState)} className="ml-1 rounded-full px-2 font-mono hover:bg-white/20" title="state + debug">{ }</button>
+    </div></div>`;
+}
+function App() {
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const [current, setCur] = useState(() => new URLSearchParams(location.search).get('variant')?.toUpperCase() || 'A');
+  const setCurrent = (v) => { const u = new URL(location.href); u.searchParams.set('variant', v); history.replaceState(null, '', u); setCur(v); };
+  const V = (VARIANTS.find((v) => v.key === current) || VARIANTS[0]).C;
+  return html`<${React.Fragment}><${V} key=${current} state=${state} dispatch=${dispatch} /><${Switcher} current=${current} setCurrent=${setCurrent} state=${state} dispatch=${dispatch} /><//>`;
+}
+createRoot(document.getElementById('root')).render(html`<${App} />`);
+</script>
+</body>
+</html>
