@@ -7,7 +7,7 @@ A minimal, single-tenant hub for publishing short-lived static HTML pages and mi
 ### Addressing
 
 **Project**:
-The top-level namespace an Artifact lives under (e.g. `xform`, `sicily-2025`).
+The top-level namespace an Artifact lives under (e.g. `xform`, `sicily-2025`). Exists while it holds an Artifact or carries a description; never an Artifact itself.
 _Avoid_: Repo, space, folder
 
 **Category**:
