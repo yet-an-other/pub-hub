@@ -1,0 +1,7 @@
+# Example /etc/pubhub/portal.toml: the Portal's non-secret config.
+# Secrets never go here; they arrive through the unit's LoadCredential=.
+# Unknown keys stop the Portal from starting. Changes take effect on restart.
+
+# The unix socket the Portal listens on. The unit's RuntimeDirectory= creates
+# /run/pubhub; nginx reaches the socket through the pubhub group.
+socket = "/run/pubhub/portal.sock"

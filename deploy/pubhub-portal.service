@@ -1,0 +1,34 @@
+[Unit]
+Description=pub-hub Portal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pubhub
+Group=pubhub
+ExecStart=/usr/local/bin/pubhub-portal -config /etc/pubhub/portal.toml
+Restart=on-failure
+RestartSec=2s
+
+# /run/pubhub holds portal.sock (mode 0660). nginx joins the pubhub group to
+# reach it; nothing else can.
+RuntimeDirectory=pubhub
+RuntimeDirectoryMode=0750
+UMask=0007
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
