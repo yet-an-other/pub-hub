@@ -3,6 +3,7 @@ package portal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,8 +11,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/yet-an-other/pub-hub/internal/auth"
 	"github.com/yet-an-other/pub-hub/internal/config"
 )
 
@@ -39,6 +43,14 @@ func run(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	secret, err := loadCredential(hubAPIClientSecretCredential)
+	if err != nil {
+		return err
+	}
+	authenticator, err := auth.NewAuthenticator(cfg.ZitadelIssuerURL, cfg.HubAPIClientID, secret, cfg.Publishers, log)
+	if err != nil {
+		return fmt.Errorf("configure authentication: %w", err)
+	}
 	ln, err := net.Listen("unix", cfg.Socket)
 	if err != nil {
 		return err
@@ -49,7 +61,7 @@ func run(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 
 	srv := &http.Server{
-		Handler:  routes(),
+		Handler:  routes(authenticator),
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelError),
 	}
 	errc := make(chan error, 1)
@@ -73,10 +85,51 @@ func run(ctx context.Context, configPath string, log *slog.Logger) error {
 	return nil
 }
 
-func routes() http.Handler {
+const hubAPIClientSecretCredential = "hub-api-client-secret"
+
+func loadCredential(name string) (string, error) {
+	directory := os.Getenv("CREDENTIALS_DIRECTORY")
+	if directory == "" {
+		return "", fmt.Errorf("credential %q is unavailable: CREDENTIALS_DIRECTORY is not set", name)
+	}
+	path := filepath.Join(directory, name)
+	secret, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read credential %q: %w", name, err)
+	}
+	value := strings.TrimSpace(string(secret))
+	if value == "" {
+		return "", fmt.Errorf("credential %q is empty", name)
+	}
+	return value, nil
+}
+
+func routes(authenticator *auth.Authenticator) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	api := http.HandlerFunc(apiRoutes)
+	mux.Handle("/api/", authenticator.Require(http.StripPrefix("/api", api)))
 	return mux
+}
+
+func apiRoutes(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/whoami" {
+		auth.WriteError(w, http.StatusNotFound, "not_found", "resource not found")
+		return
+	}
+	if r.Method != http.MethodGet {
+		auth.WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	publisher, ok := auth.PublisherFromContext(r.Context())
+	if !ok {
+		auth.WriteError(w, http.StatusInternalServerError, "internal_error", "publisher identity unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(struct {
+		Label string `json:"label"`
+	}{Label: publisher.Label})
 }

@@ -32,20 +32,29 @@ The Release workflow runs vet and tests, then publishes the binaries and checksu
    sudo usermod -aG pubhub nginx
    ```
 
-2. **(owner, host)** Create the config directory and install the config. Adjust nothing yet: the example is the working config for this stage.
+2. **(owner, host)** Create the config directory and install the config. Set the Zitadel issuer, `hub-api` client ID and `[publishers]` entries in `/etc/pubhub/portal.toml`; the client secret does not belong in this file.
 
    ```sh
    sudo install -d -m 0755 /etc/pubhub
    sudo install -m 0644 deploy/portal.toml /etc/pubhub/portal.toml
+   sudoedit /etc/pubhub/portal.toml
    ```
 
-3. **(owner, host)** Install the binary from a release, as in [Download a release](#download-a-release), then:
+3. **(owner, host)** Install the `hub-api` client secret as a root-only systemd credential. The unit exposes it to the Portal through `LoadCredential=`.
+
+   ```sh
+   sudo install -d -o root -g root -m 0700 /etc/pubhub/credentials
+   sudo install -o root -g root -m 0600 /path/to/hub-api-client-secret \
+     /etc/pubhub/credentials/hub-api-client-secret
+   ```
+
+4. **(owner, host)** Install the binary from a release, as in [Download a release](#download-a-release), then:
 
    ```sh
    sudo install -m 0755 pubhub-portal-linux-$ARCH /usr/local/bin/pubhub-portal
    ```
 
-4. **(owner, host)** Install and start the unit.
+5. **(owner, host)** Install and start the unit.
 
    ```sh
    sudo install -m 0644 deploy/pubhub-portal.service /etc/systemd/system/
@@ -54,7 +63,7 @@ The Release workflow runs vet and tests, then publishes the binaries and checksu
    journalctl -u pubhub-portal -n 5   # expect {"msg":"portal listening","socket":"/run/pubhub/portal.sock",...}
    ```
 
-5. **(owner, host)** Install the nginx server block. Set the certificate paths, and replace the `allow` lines with the host's LAN and VPN ranges, keeping `deny all` last.
+6. **(owner, host)** Install the nginx server block. Set the certificate paths, and replace the `allow` lines with the host's LAN and VPN ranges, keeping `deny all` last.
 
    ```sh
    sudo nginx -t && sudo systemctl reload nginx
@@ -62,15 +71,27 @@ The Release workflow runs vet and tests, then publishes the binaries and checksu
 
    nginx workers pick up the new `pubhub` group membership when they restart on reload. If `/healthz` answers `502` with `Permission denied` in the nginx error log, restart nginx instead.
 
-6. **(owner)** Add an internal DNS record for `hub.bdgn.me` pointing at the host. There is no public record.
+7. **(owner)** Add an internal DNS record for `hub.bdgn.me` pointing at the host. There is no public record.
 
-7. **(owner)** Verify from the LAN:
+8. **(owner)** Verify from the LAN:
 
    ```sh
    curl -si https://hub.bdgn.me/healthz   # 200, with the hardening headers
+   curl -si -H "Authorization: Bearer $PAT" https://hub.bdgn.me/api/whoami
    ```
 
-   From outside the LAN and VPN ranges, the same request gets `403`.
+   The second request returns the configured Publisher label. From outside the LAN and VPN ranges, both requests get `403`.
+
+## Zitadel machine-Publisher setup
+
+**(owner)** Do these steps in Zitadel before starting the Portal:
+
+1. Create the `pub-hub` project and the `hub-api` confidential application for the Portal's token-introspection requests. Record its client ID and client secret. Use the canonical Zitadel hostname for the issuer URL.
+2. Create one service account for each agent host and for the owner's CLI. Give each account a PAT with a one-year expiry, and record the account's user ID.
+3. Put each user ID in the `[publishers]` table in `portal.toml`, mapping it to the label that should appear as the Publisher. Restart the Portal after changing the allowlist.
+4. Store the `hub-api` client secret in `/etc/pubhub/credentials/hub-api-client-secret` as described above. The secret is never committed or placed in `portal.toml`.
+
+The Portal sends `Authorization: Bearer <PAT>` to `/api/` and introspects the PAT through `hub-api`; agents do not need access to Zitadel. A missing or inactive PAT gets `401`, an active user absent from `[publishers]` gets `403`, and a Zitadel outage gets retryable `503`.
 
 ## Download a release
 

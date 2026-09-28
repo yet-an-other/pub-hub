@@ -5,3 +5,13 @@
 # The unix socket the Portal listens on. The unit's RuntimeDirectory= creates
 # /run/pubhub; nginx reaches the socket through the pubhub group.
 socket = "/run/pubhub/portal.sock"
+
+# The canonical Zitadel issuer and the confidential hub-api application.
+# The application secret is loaded by systemd, never from this file.
+zitadel_issuer_url = "https://zitadel.example.com"
+hub_api_client_id = "replace-with-hub-api-client-id"
+
+# Zitadel user ID -> Publisher label. Add one entry for each machine
+# Publisher (including the owner's CLI service account).
+[publishers]
+# "replace-with-zitadel-user-id" = "owner"

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +46,11 @@ type runningPortal struct {
 // start runs the Portal from a fresh portal.toml and waits for its socket.
 func start(t *testing.T) runningPortal {
 	t.Helper()
+	return startWithIssuer(t, "https://zitadel.example.test")
+}
+
+func startWithIssuer(t *testing.T, issuer string) runningPortal {
+	t.Helper()
 	// Unix socket paths are limited to ~108 bytes, and t.TempDir can exceed that.
 	dir, err := os.MkdirTemp("", "pubhub")
 	if err != nil {
@@ -53,7 +59,16 @@ func start(t *testing.T) runningPortal {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "portal.sock")
 	configPath := filepath.Join(dir, "portal.toml")
-	if err := os.WriteFile(configPath, fmt.Appendf(nil, "socket = %q\n", socket), 0o644); err != nil {
+	credentialsDir := filepath.Join(dir, "credentials")
+	if err := os.Mkdir(credentialsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credentialsDir, "hub-api-client-secret"), []byte("client-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CREDENTIALS_DIRECTORY", credentialsDir)
+	config := fmt.Appendf(nil, "socket = %q\nzitadel_issuer_url = %q\nhub_api_client_id = \"hub-api-client\"\n\n[publishers]\n\"user-123\" = \"owner\"\n", socket, issuer)
+	if err := os.WriteFile(configPath, config, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,14 +107,33 @@ func start(t *testing.T) runningPortal {
 	return runningPortal{socket: socket, logs: logs, stop: stop}
 }
 
-func (r runningPortal) get(t *testing.T, path string) *http.Response {
-	t.Helper()
-	client := &http.Client{Transport: &http.Transport{
+func (r runningPortal) httpClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", r.socket)
 		},
 	}}
-	resp, err := client.Get("http://hub.bdgn.me" + path)
+}
+
+func (r runningPortal) get(t *testing.T, path string) *http.Response {
+	t.Helper()
+	resp, err := r.httpClient().Get("http://hub.bdgn.me" + path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+func (r runningPortal) getWithAuthorization(t *testing.T, path, token string) *http.Response {
+	t.Helper()
+	client := r.httpClient()
+	request, err := http.NewRequest(http.MethodGet, "http://hub.bdgn.me"+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(request)
 	if err != nil {
 		t.Fatalf("GET %s: %v", path, err)
 	}
@@ -114,6 +148,38 @@ func TestHealthzAnswers200WhileUp(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("GET /healthz = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestWhoamiReturnsTheAllowlistedPublisherLabel(t *testing.T) {
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth/v2/introspect" {
+			t.Errorf("introspection path = %q", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("ParseForm: %v", err)
+		}
+		if got := r.Form.Get("token"); got != "pat" {
+			t.Errorf("introspection token = %q, want pat", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"active":true,"sub":"user-123"}`))
+	}))
+	defer idp.Close()
+	p := startWithIssuer(t, idp.URL)
+
+	resp := p.getWithAuthorization(t, "/api/whoami", "pat")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/whoami = %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Label != "owner" {
+		t.Errorf("label = %q, want owner", body.Label)
 	}
 }
 

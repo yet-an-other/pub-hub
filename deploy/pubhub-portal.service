@@ -8,6 +8,7 @@ Type=simple
 User=pubhub
 Group=pubhub
 ExecStart=/usr/local/bin/pubhub-portal -config /etc/pubhub/portal.toml
+LoadCredential=hub-api-client-secret:/etc/pubhub/credentials/hub-api-client-secret
 Restart=on-failure
 RestartSec=2s
 
