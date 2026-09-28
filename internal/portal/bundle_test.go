@@ -104,6 +104,62 @@ func TestBundleRejectsDuplicateAndTooManyFiles(t *testing.T) {
 	}
 }
 
+func TestBundleDescriptionCanBeSetPreservedAndCleared(t *testing.T) {
+	store := newMemoryArtifactStore()
+	handler := newArtifactHandler(t, store)
+	publish := func(description *string) *httptest.ResponseRecorder {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		if description != nil {
+			_ = writer.WriteField("description", *description)
+		}
+		part, _ := writer.CreateFormFile("index.html", "index.html")
+		_, _ = io.WriteString(part, "<title>Demo</title>")
+		_ = writer.Close()
+		return artifactRequest(t, handler, http.MethodPut, "/api/artifacts/xform/demo/", body.Bytes(), writer.FormDataContentType())
+	}
+	text, empty := "First description", ""
+	if got := publish(&text); got.Code != 201 || decodeArtifact(t, got).Description != text {
+		t.Fatalf("set description: %d %s", got.Code, got.Body)
+	}
+	if got := publish(nil); got.Code != 200 || decodeArtifact(t, got).Description != text {
+		t.Errorf("preserve description: %d %s", got.Code, got.Body)
+	}
+	if got := publish(&empty); got.Code != 200 || decodeArtifact(t, got).Description != "" {
+		t.Errorf("clear description: %d %s", got.Code, got.Body)
+	}
+	text = strings.Repeat("a", 1001)
+	if got := publish(&text); got.Code != 400 || !strings.Contains(got.Body.String(), `"code":"request_invalid"`) {
+		t.Errorf("long description: %d %s", got.Code, got.Body)
+	}
+}
+
+func TestBundleRejectsNestedArtifactsAndFullKeyOverflow(t *testing.T) {
+	store := newMemoryArtifactStore()
+	handler := newArtifactHandler(t, store)
+	if response := bundleRequest(t, handler, map[string]string{"index.html": "parent"}); response.Code != 201 {
+		t.Fatal(response.Body)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, _ := writer.CreateFormFile("index.html", "index.html")
+	_, _ = io.WriteString(part, "child")
+	_ = writer.Close()
+	child := artifactRequest(t, handler, http.MethodPut, "/api/artifacts/xform/demo/child/", body.Bytes(), writer.FormDataContentType())
+	if child.Code != 409 || !strings.Contains(child.Body.String(), `"code":"nesting_conflict"`) {
+		t.Errorf("nested Bundle: %d %s", child.Code, child.Body)
+	}
+	name := strings.Repeat("x", 255) + "/" + strings.Repeat("y", 255) + "/" + strings.Repeat("z", 255) + "/" + strings.Repeat("w", 255)
+	response := bundleRequest(t, handler, map[string]string{"index.html": "changed", name: "bad"})
+	if response.Code != 400 || !strings.Contains(response.Body.String(), `"code":"path_invalid"`) {
+		t.Errorf("oversized key: %d %s", response.Code, response.Body)
+	}
+	content, _, _ := store.object("xform/demo/index.html")
+	if string(content) != "parent" {
+		t.Errorf("parent changed: %q", content)
+	}
+}
+
 func TestBundleSpoolIsEmptyAfterSuccessAndFailure(t *testing.T) {
 	spool := t.TempDir()
 	handler := newArtifactHandlerWithSpool(t, newMemoryArtifactStore(), http.StatusOK, spool)

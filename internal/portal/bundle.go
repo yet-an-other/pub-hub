@@ -52,7 +52,7 @@ func bundleContentType(key string) string {
 	return "application/octet-stream"
 }
 
-func (a *application) spoolBundle(w http.ResponseWriter, r *http.Request) (string, []bundleFile, int64, error) {
+func (a *application) spoolBundle(w http.ResponseWriter, r *http.Request, prefix string, description **string) (string, []bundleFile, int64, error) {
 	if r.ContentLength > maxPublishBytes {
 		return "", nil, 0, errTooLarge
 	}
@@ -86,15 +86,24 @@ func (a *application) spoolBundle(w http.ResponseWriter, r *http.Request) (strin
 				_ = part.Close()
 				return dir, nil, 0, errors.New("unexpected multipart field")
 			}
-			_, err = io.Copy(io.Discard, part)
+			if *description != nil {
+				_ = part.Close()
+				return dir, nil, 0, errors.New("duplicate description")
+			}
+			body, err := io.ReadAll(io.LimitReader(part, 4001))
 			_ = part.Close()
 			if err != nil {
 				return dir, nil, 0, err
 			}
+			if len(body) > 4000 || !utf8.Valid(body) || utf8.RuneCount(body) > 1000 {
+				return dir, nil, 0, errors.New("description too long or invalid")
+			}
+			value := string(body)
+			*description = &value
 			continue
 		}
 		key := part.FormName()
-		if !validBundleKey(key) {
+		if !validBundleKey(key) || len(prefix)+len(key) > 1024 {
 			_ = part.Close()
 			return dir, nil, 0, errPathInvalid
 		}
@@ -131,7 +140,8 @@ func (a *application) spoolBundle(w http.ResponseWriter, r *http.Request) (strin
 }
 
 func (a *application) publishBundle(w http.ResponseWriter, r *http.Request, path naming.ArtifactPath, publisher string, started time.Time) {
-	dir, files, total, err := a.spoolBundle(w, r)
+	var description *string
+	dir, files, total, err := a.spoolBundle(w, r, path.PublicPath(), &description)
 	if dir != "" {
 		defer os.RemoveAll(dir)
 	}
@@ -166,8 +176,16 @@ func (a *application) publishBundle(w http.ResponseWriter, r *http.Request, path
 	if exists {
 		createdAt = previous.CreatedAt
 	}
-	record := artifactRecord{Path: path.PublicPath(), Title: title, Description: previous.Description, CreatedAt: createdAt, UpdatedAt: updatedAt, LastPublisher: publisher, TotalSize: total, FileCount: len(files), State: "incomplete"}
+	value := previous.Description
+	if description != nil {
+		value = *description
+	}
+	record := artifactRecord{Path: path.PublicPath(), Title: title, Description: value, CreatedAt: createdAt, UpdatedAt: updatedAt, LastPublisher: publisher, TotalSize: total, FileCount: len(files), State: "incomplete"}
 	if err := a.putRecord(r.Context(), stem, record); err != nil {
+		if errors.Is(err, errNestingConflict) {
+			auth.WriteError(w, http.StatusConflict, "nesting_conflict", "Artifact cannot nest inside another Artifact")
+			return
+		}
 		a.storageUnavailable(w, "write incomplete record", err)
 		return
 	}

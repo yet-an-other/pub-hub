@@ -399,6 +399,10 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 		State:         "incomplete",
 	}
 	if err := a.putRecord(r.Context(), stem, record); err != nil {
+		if errors.Is(err, errNestingConflict) {
+			auth.WriteError(w, http.StatusConflict, "nesting_conflict", "Artifact cannot nest inside another Artifact")
+			return
+		}
 		a.storageUnavailable(w, "write incomplete record", err)
 		return
 	}
@@ -422,6 +426,19 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 	writeJSON(w, status, a.view(record))
 }
 
+var errNestingConflict = errors.New("Artifact nesting conflict")
+
+func (a *application) nestingConflict(stem string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for other := range a.records {
+		if other != stem && (strings.HasPrefix(stem, other+"/") || strings.HasPrefix(other, stem+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *application) putRecord(ctx context.Context, stem string, record artifactRecord) error {
 	body, err := json.Marshal(record)
 	if err != nil {
@@ -429,6 +446,9 @@ func (a *application) putRecord(ctx context.Context, stem string, record artifac
 	}
 	a.recordWriteMu.Lock()
 	defer a.recordWriteMu.Unlock()
+	if record.State == "incomplete" && a.nestingConflict(stem) {
+		return errNestingConflict
+	}
 	if err := a.store.PutRecord(ctx, stem+".json", body); err != nil {
 		return err
 	}
