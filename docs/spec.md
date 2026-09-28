@@ -1,6 +1,6 @@
 # pub-hub handoff spec
 
-This spec assembles pub-hub's design so it can be sliced into implementation issues. It restates decisions and decides nothing new: each statement cites the ticket or ADR where it was decided. Terms follow [CONTEXT.md]. Where a source was loose, the reading the spec takes is listed in §13 so the owner can overrule it. Open questions are tickets on the map, [#1]. When this spec was assembled, the only open one was [#17].
+This spec assembles pub-hub's design so it can be sliced into implementation issues. It restates decisions and decides nothing new: each statement cites the ticket or ADR where it was decided. Terms follow [CONTEXT.md]. Where a source was loose, the reading the spec takes is listed in §13 so the owner can overrule it. Open questions are tickets on the map, [#1], and §13.4 lists any that are open.
 
 ## 1. Overview
 
@@ -265,7 +265,7 @@ An Artifact's record is keyed by its stem: `xform/notes/plan.json` covers `xform
 | updated at | The last publish |
 | last Publisher | The Publisher label (§4.5) |
 | total size, file count | Computed at publish |
-| state | `publishing` or `published` |
+| state | `incomplete` or `published` ([#17]) |
 
 Records don't store the file list, tags or publish history ([#6]). For the file list, the Portal lists `…/<name>/` in the Artifact bucket, and the no-nesting rule guarantees everything under it belongs to that Artifact.
 
@@ -293,7 +293,7 @@ Records don't store the file list, tags or publish history ([#6]). For the file 
 - Each Artifact has an in-memory in-flight marker ([#8]):
   - While a publish, delete or description edit of an Artifact runs, any other mutation of it gets `409 busy` with `Retry-After: 5`.
   - Different Artifacts proceed in parallel.
-  - The marker is never persisted, so a record left in `publishing` after a crash blocks nothing. Publishing again fixes it.
+  - The marker is never persisted, so a record left `incomplete` after a crash blocks nothing. Publishing again or deleting fixes it.
 
 ### 5.4 Publish and delete sequences
 
@@ -301,22 +301,23 @@ Records don't store the file list, tags or publish history ([#6]). For the file 
 
 1. Spool the whole request to a temp directory (`/var/cache/pubhub/spool`), bounded by the size cap.
 2. Validate everything: names and path rules, limits, `index.html` present in a Bundle, the title extracted. An invalid upload never touches the live Artifact.
-3. Write the record as `publishing`, before the first byte.
+3. Write the record as `incomplete`, before the first byte.
 4. Upload every file except the entry, then the entry (`index.html` or the single file).
 5. Delete leftovers: files under the Bundle that are absent from the new set.
 6. Mark the record `published`.
 
-The request is synchronous and returns once the publish is complete. A crash leaves the record in `publishing`, which the Catalogue shows as incomplete, and publishing again repairs it. No reconcile loop is needed, because a live byte never exists without a record ([ADR 0003]).
+The request is synchronous and returns once the publish is complete. A crash leaves the record `incomplete`, which the Catalogue shows as Incomplete, and publishing again or deleting repairs it. No reconcile loop is needed, because a live byte never exists without a record ([ADR 0003]).
 
-**Delete** ([ADR 0001], [ADR 0003]):
+**Delete** ([ADR 0001], [ADR 0003], [#17]):
 
-1. Remove the entry first, so the Artifact returns 404 at once.
-2. Remove the other files.
-3. Remove the record.
+1. Write the record as `incomplete`, before touching any byte.
+2. Remove the entry first, if it is still there, so the Artifact returns 404 at once.
+3. Remove the other files.
+4. Remove the record.
 
 Deletion is immediate and final: a plain `404`, the name reusable at once, and no tombstones.
 
-**Open:** what the record says while a delete is in progress. As specified, a crash between removing the bytes and removing the record leaves a `published` record for an Artifact Readers can no longer reach ([#17]).
+A crash leaves the record `incomplete`, which the Catalogue shows as Incomplete. A delete is driven by the record, not by the entry, so repeating it removes whatever bytes remain, even when the entry is already gone ([#17]).
 
 ### 5.5 Serving
 
@@ -372,7 +373,7 @@ The API path equals the Artifact's public path: `pub.bdgn.me/xform/notes/plan.ht
 | `PUT /api/artifacts/<path>.html` or `…/<path>/` | Publish or replace. The shape comes from the suffix |
 | `GET /api/artifacts/<path>.html` or `…/<path>/` | Metadata, including the `pub.` URL |
 | `PATCH /api/artifacts/<path>.html` or `…/<path>/` | `{"description": …}`, a metadata-only edit |
-| `DELETE /api/artifacts/<path>.html` or `…/<path>/` | Delete, `204` |
+| `DELETE /api/artifacts/<path>.html` or `…/<path>/` | Delete, `204`. Acts whenever a record exists, even if the entry is already gone. `404` only when there is no record ([#17]) |
 | `GET /api/artifacts?prefix=…` | List, with no pagination (the list is in memory and single-tenant) |
 | `GET /api/projects` | Projects with their description and Artifact count, including empty described ones |
 | `PATCH /api/projects/<project>` | `{"description": …}`, where an empty value clears it |
@@ -402,7 +403,8 @@ From [#8]:
 - `PUT` answers `201` on create and `200` on replace, with the metadata and URL in the body.
 - `If-None-Match: *` means create only. If the Artifact already exists, the answer is `412 exists`.
 - There is no `If-Match`.
-- A crashed publish leaves the Artifact in `publishing`. Publishing again retries it ([#6]).
+- A crashed publish or delete leaves the Artifact `incomplete`. Publishing again or deleting finishes it ([#6], [#17]).
+- A create-only publish over an `incomplete` record also gets `412 exists`, because the record may still be serving files ([#17]).
 
 ### 6.4 Limits
 
@@ -433,7 +435,7 @@ The Catalogue is the Portal SPA at `hub.bdgn.me/`, calling the API under `/ui/ap
 
 - A top bar with the pub-hub mark, "Private Catalogue", the total size and Artifact count, the owner's email, and Sign out (`/oauth2/sign_out`).
 - A heading "Published Artifacts" with the count, a **Publish** button, and the note "Descriptions are private".
-- An incomplete banner when any Artifact is in `publishing`. Its "Show" link switches the filter to Incomplete.
+- An incomplete banner when any Artifact is `incomplete`. Its "Show" link switches the filter to Incomplete.
 - Search with a `/` shortcut, covering Projects, paths, titles, descriptions and Publishers, plus **All / Incomplete** filter buttons.
 
 ### 7.2 The list
@@ -459,7 +461,7 @@ Clicking a row toggles it open:
 - The full URL, with copy-link and open buttons.
 - The full description, click-to-edit, plain text up to 1,000 characters.
 - "Updated … by <Publisher>", the created time, the file count and the size.
-- For an incomplete Artifact, a note that Readers may see mixed files.
+- For an incomplete Artifact, the note "The last publish or delete didn't finish. Readers may see mixed files or 404s. Publish again or delete to finish." ([#17]).
 - **Publish new version** opens the publish form in place, with the path fixed.
 - **Delete** asks for confirmation in the row: "Readers get 404 at once; there is no undo".
 
@@ -763,7 +765,7 @@ None of these was decided anywhere, and none is a design question:
 
 ### 13.4 Open
 
-- [#17] Crash visibility for a delete in progress (§5.4).
+No ticket on the map is open.
 
 ## Sources
 
@@ -785,7 +787,7 @@ None of these was decided anywhere, and none is a design question:
 - [#13] Public exposure of pub.bdgn.me via Cloudflare Tunnel (research)
 - [#14] Deployment on the home server: units, nginx, secrets, provisioning
 - [#15] Backups and observability
-- [#17] Crash visibility for a delete in progress (open)
+- [#17] Crash visibility for a delete in progress
 
 **ADRs:**
 

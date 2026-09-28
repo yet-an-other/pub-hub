@@ -9,6 +9,6 @@ Each Artifact's metadata is one JSON record in a separate, private metadata buck
 
 ## Consequences
 
-- **Record first.** Publishing writes the record with `state: publishing` before the first byte and sets `published` after leftovers are deleted; deleting removes bytes (entry first) and then the record. A live byte never exists without a record, so a crashed publish shows as incomplete in the Catalogue and no reconcile loop is needed.
+- **Record first.** Both publishing and deleting write the record with `state: incomplete` before touching any byte. Publishing sets `published` after leftovers are deleted; deleting removes bytes (entry first) and then the record. A live byte never exists without a record, so a crashed publish or delete shows as Incomplete in the Catalogue and no reconcile loop is needed (amended by [#17](https://github.com/yet-an-other/pub-hub/issues/17)).
 - Running two Portal processes against the same buckets is unsupported.
 - The metadata bucket is a second backup target alongside the Artifact bucket.

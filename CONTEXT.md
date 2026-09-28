@@ -22,6 +22,12 @@ _Avoid_: Page, post, upload, asset
 An Artifact that is a directory tree of static files whose entry point is `index.html` (e.g. a minisite built from Markdown).
 _Avoid_: Site, archive, package
 
+### Lifecycle
+
+**Incomplete**:
+An Artifact whose last publish or delete started but has not finished. Until it is published again or deleted, Readers may see a mix of old and new files, or 404s.
+_Avoid_: Broken, partial, stuck
+
 ### Actors and surfaces
 
 **Portal**:
