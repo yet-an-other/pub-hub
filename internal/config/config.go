@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,18 @@ type Config struct {
 	// Publishers maps Zitadel user IDs to the Publisher labels recorded by the
 	// Portal.
 	Publishers map[string]string `toml:"publishers"`
+
+	// S3Endpoint is the RGW endpoint. Credentials arrive through
+	// systemd's LoadCredential=.
+	S3Endpoint string `toml:"s3_endpoint"`
+	// ArtifactBucket holds Reader-visible Artifact bytes.
+	ArtifactBucket string `toml:"artifact_bucket"`
+	// MetadataBucket holds private Artifact records.
+	MetadataBucket string `toml:"metadata_bucket"`
+	// PublicBaseURL is the origin used to construct Reader URLs.
+	PublicBaseURL string `toml:"public_base_url"`
+	// SpoolDirectory holds uploads until they are validated and published.
+	SpoolDirectory string `toml:"spool_directory"`
 }
 
 // Load reads and validates the config at path. Unknown keys are an error, so
@@ -43,6 +56,9 @@ func Load(path string) (Config, error) {
 			keys[i] = k.String()
 		}
 		return Config{}, fmt.Errorf("config %s: unknown keys: %s", path, strings.Join(keys, ", "))
+	}
+	if cfg.SpoolDirectory == "" {
+		cfg.SpoolDirectory = "/var/cache/pubhub/spool"
 	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, fmt.Errorf("config %s: %w", path, err)
@@ -65,6 +81,27 @@ func (c Config) validate() error {
 	issuer, err := url.Parse(c.ZitadelIssuerURL)
 	if err != nil || issuer.Scheme == "" || issuer.Host == "" {
 		return fmt.Errorf("zitadel issuer URL must be an absolute URL, got %q", c.ZitadelIssuerURL)
+	}
+	if c.S3Endpoint == "" || c.ArtifactBucket == "" || c.MetadataBucket == "" || c.PublicBaseURL == "" {
+		return errors.New("s3 endpoint, artifact bucket, metadata bucket, and public base URL are required")
+	}
+	endpoint, err := url.Parse(c.S3Endpoint)
+	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return fmt.Errorf("s3 endpoint must be an absolute http(s) URL without credentials or query, got %q", c.S3Endpoint)
+	}
+	endpointIP := net.ParseIP(endpoint.Hostname())
+	if endpointIP == nil || !endpointIP.IsLoopback() {
+		return fmt.Errorf("s3 endpoint must use a loopback IP address, got %q", c.S3Endpoint)
+	}
+	if c.ArtifactBucket == c.MetadataBucket {
+		return errors.New("artifact and metadata buckets must be different")
+	}
+	if !filepath.IsAbs(c.SpoolDirectory) || filepath.Clean(c.SpoolDirectory) == string(filepath.Separator) {
+		return fmt.Errorf("spool directory must be an absolute non-root path, got %q", c.SpoolDirectory)
+	}
+	publicURL, err := url.Parse(c.PublicBaseURL)
+	if err != nil || publicURL.Scheme != "https" || publicURL.Host == "" || publicURL.User != nil || (publicURL.Path != "" && publicURL.Path != "/") || publicURL.RawQuery != "" || publicURL.Fragment != "" {
+		return fmt.Errorf("public base URL must be an https origin, got %q", c.PublicBaseURL)
 	}
 	for userID, label := range c.Publishers {
 		if strings.TrimSpace(userID) == "" {

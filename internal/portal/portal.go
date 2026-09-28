@@ -3,7 +3,6 @@ package portal
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/yet-an-other/pub-hub/internal/auth"
 	"github.com/yet-an-other/pub-hub/internal/config"
+	"github.com/yet-an-other/pub-hub/internal/storage/s3store"
 )
 
 // socketMode lets only the pubhub user and its group, which nginx joins, reach
@@ -51,6 +51,31 @@ func run(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("configure authentication: %w", err)
 	}
+	accessKey, err := loadCredential(rgwAccessKeyIDCredential)
+	if err != nil {
+		return err
+	}
+	secretKey, err := loadCredential(rgwSecretAccessKeyCredential)
+	if err != nil {
+		return err
+	}
+	store, err := s3store.New(s3store.Config{
+		Endpoint:       cfg.S3Endpoint,
+		ArtifactBucket: cfg.ArtifactBucket,
+		MetadataBucket: cfg.MetadataBucket,
+		AccessKey:      accessKey,
+		SecretKey:      secretKey,
+	})
+	if err != nil {
+		return fmt.Errorf("configure S3 storage: %w", err)
+	}
+	app := newApplication(store, cfg.PublicBaseURL, cfg.SpoolDirectory, log)
+	if err := app.prepareSpool(); err != nil {
+		return err
+	}
+	startupCtx, cancelStartup := context.WithTimeout(ctx, 5*time.Second)
+	app.loadStartup(startupCtx)
+	cancelStartup()
 	ln, err := net.Listen("unix", cfg.Socket)
 	if err != nil {
 		return err
@@ -61,7 +86,7 @@ func run(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 
 	srv := &http.Server{
-		Handler:  routes(authenticator),
+		Handler:  routes(authenticator, app),
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelError),
 	}
 	errc := make(chan error, 1)
@@ -85,7 +110,11 @@ func run(ctx context.Context, configPath string, log *slog.Logger) error {
 	return nil
 }
 
-const hubAPIClientSecretCredential = "hub-api-client-secret"
+const (
+	hubAPIClientSecretCredential = "hub-api-client-secret"
+	rgwAccessKeyIDCredential     = "rgw-access-key-id"
+	rgwSecretAccessKeyCredential = "rgw-secret-access-key"
+)
 
 func loadCredential(name string) (string, error) {
 	directory := os.Getenv("CREDENTIALS_DIRECTORY")
@@ -104,32 +133,29 @@ func loadCredential(name string) (string, error) {
 	return value, nil
 }
 
-func routes(authenticator *auth.Authenticator) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
+func routes(authenticator *auth.Authenticator, app *application) http.Handler {
+	api := http.StripPrefix("/api", http.HandlerFunc(app.apiRoutes))
+	machineAPI := authenticator.Require(api)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.EscapedPath() {
+		case "/healthz":
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		case "/readyz":
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			app.readyz(w, r, authenticator)
+		default:
+			if strings.HasPrefix(r.URL.EscapedPath(), "/api/") {
+				machineAPI.ServeHTTP(w, r)
+				return
+			}
+			http.NotFound(w, r)
+		}
 	})
-	api := http.HandlerFunc(apiRoutes)
-	mux.Handle("/api/", authenticator.Require(http.StripPrefix("/api", api)))
-	return mux
-}
-
-func apiRoutes(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/whoami" {
-		auth.WriteError(w, http.StatusNotFound, "not_found", "resource not found")
-		return
-	}
-	if r.Method != http.MethodGet {
-		auth.WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
-		return
-	}
-	publisher, ok := auth.PublisherFromContext(r.Context())
-	if !ok {
-		auth.WriteError(w, http.StatusInternalServerError, "internal_error", "publisher identity unavailable")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(struct {
-		Label string `json:"label"`
-	}{Label: publisher.Label})
 }

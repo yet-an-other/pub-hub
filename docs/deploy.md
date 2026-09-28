@@ -25,6 +25,8 @@ The Release workflow runs vet and tests, then publishes the binaries and checksu
 
 ## Install
 
+Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#zitadel-machine-publisher-setup) before installing credentials or starting the Portal. The next steps use the users, buckets and application created there.
+
 1. **(owner, host)** Create the `pubhub` system user and put nginx in its group, so nginx can reach the `0660` socket. The nginx user is `nginx`, `www-data` or `http` depending on the distribution.
 
    ```sh
@@ -32,7 +34,7 @@ The Release workflow runs vet and tests, then publishes the binaries and checksu
    sudo usermod -aG pubhub nginx
    ```
 
-2. **(owner, host)** Create the config directory and install the config. Set the Zitadel issuer, `hub-api` client ID and `[publishers]` entries in `/etc/pubhub/portal.toml`; the client secret does not belong in this file.
+2. **(owner, host)** Create the config directory and install the config. Set the Zitadel issuer, `hub-api` client ID, `[publishers]` entries, RGW loopback endpoint, bucket names and `pub.` base URL in `/etc/pubhub/portal.toml`. The RGW endpoint must be the loopback URL, not `s3.bdgn.me`; secrets do not belong in this file.
 
    ```sh
    sudo install -d -m 0755 /etc/pubhub
@@ -40,12 +42,16 @@ The Release workflow runs vet and tests, then publishes the binaries and checksu
    sudoedit /etc/pubhub/portal.toml
    ```
 
-3. **(owner, host)** Install the `hub-api` client secret as a root-only systemd credential. The unit exposes it to the Portal through `LoadCredential=`.
+3. **(owner, host)** Install the `hub-api` client secret and the `pub-hub` RGW access/secret keys as root-only systemd credentials. The unit exposes them to the Portal through `LoadCredential=`. Do not install the provisioning user's keys on the server.
 
    ```sh
    sudo install -d -o root -g root -m 0700 /etc/pubhub/credentials
    sudo install -o root -g root -m 0600 /path/to/hub-api-client-secret \
      /etc/pubhub/credentials/hub-api-client-secret
+   sudo install -o root -g root -m 0600 /path/to/pub-hub-access-key-id \
+     /etc/pubhub/credentials/rgw-access-key-id
+   sudo install -o root -g root -m 0600 /path/to/pub-hub-secret-access-key \
+     /etc/pubhub/credentials/rgw-secret-access-key
    ```
 
 4. **(owner, host)** Install the binary from a release, as in [Download a release](#download-a-release), then:
@@ -77,10 +83,89 @@ The Release workflow runs vet and tests, then publishes the binaries and checksu
 
    ```sh
    curl -si https://hub.bdgn.me/healthz   # 200, with the hardening headers
+   curl -si https://hub.bdgn.me/readyz    # 200; both storage checks are true
    curl -si -H "Authorization: Bearer $PAT" https://hub.bdgn.me/api/whoami
    ```
 
-   The second request returns the configured Publisher label. From outside the LAN and VPN ranges, both requests get `403`.
+   The `whoami` request returns the configured Publisher label. From outside the LAN and VPN ranges, all three requests get `403`.
+
+## RGW users, buckets and policies
+
+**(owner, host)** Provision both buckets with the RGW S3 API. `pub-hub-owner` is for provisioning only; the Portal runs as `pub-hub` and receives only the access keys for that user.
+
+1. Create the two users and allow `pub-hub` to use its credentials without granting it bucket-administration commands:
+
+   ```sh
+   sudo radosgw-admin user create --uid=pub-hub-owner --display-name='pub-hub bucket owner'
+   sudo radosgw-admin user create --uid=pub-hub --display-name='pub-hub Portal'
+   sudo radosgw-admin user modify --uid=pub-hub --max-buckets=-1
+   ```
+
+   Keep `pub-hub-owner`'s keys with the provisioning operator. Securely copy only `pub-hub`'s access key ID and secret access key into the credential files from Install step 3. Configure the provisioning keys in the owner's local AWS CLI profile named `pub-hub-owner`; do not copy that profile to the server.
+
+2. Using the provisioning user's S3 credentials, create the buckets. Replace the endpoint port if the host's RGW listens elsewhere:
+
+   ```sh
+   RGW=http://127.0.0.1:7480
+   AWS_PROFILE=pub-hub-owner
+   export RGW AWS_PROFILE
+   aws --endpoint-url "$RGW" --region default s3api create-bucket --bucket pubhub-artifacts
+   aws --endpoint-url "$RGW" --region default s3api create-bucket --bucket pubhub-meta
+   ```
+
+3. Apply the bucket policies **before** enabling the metadata bucket's Public Access Block. These policies grant the Portal list/read/write/delete access and allow anonymous `GetObject` only on the Artifact bucket; they do not grant anonymous listing.
+
+   ```sh
+   cat >/tmp/pubhub-artifacts-policy.json <<'JSON'
+   {"Version":"2012-10-17","Statement":[
+     {"Sid":"PortalList","Effect":"Allow","Principal":{"AWS":"arn:aws:iam:::user/pub-hub"},"Action":"s3:ListBucket","Resource":"arn:aws:s3:::pubhub-artifacts"},
+     {"Sid":"PortalObjects","Effect":"Allow","Principal":{"AWS":"arn:aws:iam:::user/pub-hub"},"Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":"arn:aws:s3:::pubhub-artifacts/*"},
+     {"Sid":"ReadersGetObjects","Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::pubhub-artifacts/*"}
+   ]}
+   JSON
+   cat >/tmp/pubhub-meta-policy.json <<'JSON'
+   {"Version":"2012-10-17","Statement":[
+     {"Sid":"PortalList","Effect":"Allow","Principal":{"AWS":"arn:aws:iam:::user/pub-hub"},"Action":"s3:ListBucket","Resource":"arn:aws:s3:::pubhub-meta"},
+     {"Sid":"PortalObjects","Effect":"Allow","Principal":{"AWS":"arn:aws:iam:::user/pub-hub"},"Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":"arn:aws:s3:::pubhub-meta/*"}
+   ]}
+   JSON
+   aws --endpoint-url "$RGW" --region default s3api put-bucket-policy \
+     --bucket pubhub-artifacts --policy file:///tmp/pubhub-artifacts-policy.json
+   aws --endpoint-url "$RGW" --region default s3api put-bucket-policy \
+     --bucket pubhub-meta --policy file:///tmp/pubhub-meta-policy.json
+   ```
+
+4. Set Public Access Block only after the policy is in place. For Artifacts, only `IgnorePublicAcls` is needed; the bucket policy intentionally grants public reads. The private metadata bucket uses all protective settings except `BlockPublicAcls`:
+
+   ```sh
+   aws --endpoint-url "$RGW" --region default s3api put-public-access-block \
+     --bucket pubhub-artifacts \
+     --public-access-block-configuration '{"BlockPublicAcls":false,"IgnorePublicAcls":true,"BlockPublicPolicy":false,"RestrictPublicBuckets":false}'
+   aws --endpoint-url "$RGW" --region default s3api put-public-access-block \
+     --bucket pubhub-meta \
+     --public-access-block-configuration '{"BlockPublicAcls":false,"IgnorePublicAcls":true,"BlockPublicPolicy":true,"RestrictPublicBuckets":true}'
+   ```
+
+   On Ceph Squid, never set `BlockPublicAcls: true`. RGW 19.2.0–19.2.4 then returns `403` for every `PutObject`. `BlockPublicPolicy: true` rejects policy changes, so lower that flag, change the policy, then restore it. Keep the metadata bucket policy private throughout.
+
+5. After Install, publish a probe Artifact through the Portal and check the policy boundary from an unauthenticated machine. Anonymous `GetObject` for the known Artifact must succeed. The remaining requests must return `403` from RGW (the public nginx server later maps missing-object `403` to Reader-facing `404`):
+
+   ```sh
+   curl -f -X PUT -H "Authorization: Bearer $PAT" \
+     -F "file=@plan.html" https://hub.bdgn.me/api/artifacts/xform/notes/plan.html
+   curl -fsS "$RGW/pubhub-artifacts/xform/notes/plan.html" >/dev/null  # anonymous 200
+   aws --no-sign-request --endpoint-url "$RGW" --region default s3api list-objects-v2 --bucket pubhub-artifacts
+   aws --no-sign-request --endpoint-url "$RGW" --region default s3api get-object-acl \
+     --bucket pubhub-artifacts --key xform/notes/plan.html
+   aws --no-sign-request --endpoint-url "$RGW" --region default s3api put-object \
+     --bucket pubhub-artifacts --key forbidden.html --body /etc/hostname
+   aws --no-sign-request --endpoint-url "$RGW" --region default s3api delete-object \
+     --bucket pubhub-artifacts --key xform/notes/plan.html
+   aws --no-sign-request --endpoint-url "$RGW" --region default s3api get-object \
+     --bucket pubhub-artifacts --key does-not-exist.html /tmp/missing.html
+   ```
+
+   Each of the final five commands should fail with `403`; only the first public read succeeds. For `get-object` use a key known not to exist. Do not add a public `ListBucket` grant to make the missing-key response a `404` at RGW.
 
 ## Zitadel machine-Publisher setup
 

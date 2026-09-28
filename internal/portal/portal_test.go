@@ -63,11 +63,17 @@ func startWithIssuer(t *testing.T, issuer string) runningPortal {
 	if err := os.Mkdir(credentialsDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(credentialsDir, "hub-api-client-secret"), []byte("client-secret\n"), 0o600); err != nil {
-		t.Fatal(err)
+	for name, value := range map[string]string{
+		"hub-api-client-secret": "client-secret\n",
+		"rgw-access-key-id":     "access-key\n",
+		"rgw-secret-access-key": "secret-key\n",
+	} {
+		if err := os.WriteFile(filepath.Join(credentialsDir, name), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("CREDENTIALS_DIRECTORY", credentialsDir)
-	config := fmt.Appendf(nil, "socket = %q\nzitadel_issuer_url = %q\nhub_api_client_id = \"hub-api-client\"\n\n[publishers]\n\"user-123\" = \"owner\"\n", socket, issuer)
+	config := fmt.Appendf(nil, "socket = %q\nzitadel_issuer_url = %q\nhub_api_client_id = \"hub-api-client\"\ns3_endpoint = \"http://127.0.0.1:1\"\nartifact_bucket = \"pubhub-artifacts\"\nmetadata_bucket = \"pubhub-meta\"\npublic_base_url = \"https://pub.bdgn.me\"\nspool_directory = %q\n\n[publishers]\n\"user-123\" = \"owner\"\n", socket, issuer, filepath.Join(dir, "spool"))
 	if err := os.WriteFile(configPath, config, 0o644); err != nil {
 		t.Fatal(err)
 	}

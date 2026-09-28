@@ -11,6 +11,13 @@ socket = "/run/pubhub/portal.sock"
 zitadel_issuer_url = "https://zitadel.example.com"
 hub_api_client_id = "replace-with-hub-api-client-id"
 
+# RGW endpoint and bucket names. Use the loopback endpoint, not s3.bdgn.me.
+s3_endpoint = "http://127.0.0.1:7480"
+artifact_bucket = "pubhub-artifacts"
+metadata_bucket = "pubhub-meta"
+public_base_url = "https://pub.bdgn.me"
+spool_directory = "/var/cache/pubhub/spool"
+
 # Zitadel user ID -> Publisher label. Add one entry for each machine
 # Publisher (including the owner's CLI service account).
 [publishers]

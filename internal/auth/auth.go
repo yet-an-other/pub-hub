@@ -39,6 +39,7 @@ type cacheEntry struct {
 // in the cache.
 type Introspector struct {
 	endpoint     string
+	issuerURL    string
 	clientID     string
 	clientSecret string
 	httpClient   *http.Client
@@ -66,6 +67,7 @@ func NewIntrospector(issuerURL, clientID, clientSecret string) (*Introspector, e
 
 	return &Introspector{
 		endpoint:     strings.TrimRight(issuerURL, "/") + "/oauth/v2/introspect",
+		issuerURL:    strings.TrimRight(issuerURL, "/"),
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		httpClient:   &http.Client{Timeout: introspectionTimeout},
@@ -124,6 +126,22 @@ func (i *Introspector) request(ctx context.Context, token string) (introspection
 	return result, nil
 }
 
+// reachable reports whether the issuer's OIDC discovery endpoint responds
+// successfully. Readiness reports this independently of storage availability.
+func (i *Introspector) reachable(ctx context.Context) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, i.issuerURL+"/.well-known/openid-configuration", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := i.httpClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBody))
+	return resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
+}
+
 // Publisher is the authenticated machine Publisher identity.
 type Publisher struct {
 	Subject string
@@ -166,6 +184,11 @@ func NewAuthenticator(issuerURL, clientID, clientSecret string, allowlist map[st
 // Require authenticates a machine Publisher and adds its identity to the
 // request context before invoking next. Cookies and identity headers are not
 // consulted.
+// IDPReachable reports whether the configured Zitadel issuer is reachable.
+func (a *Authenticator) IDPReachable(ctx context.Context) bool {
+	return a.introspector.reachable(ctx)
+}
+
 func (a *Authenticator) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := bearerToken(r.Header.Get("Authorization"))

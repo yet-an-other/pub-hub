@@ -9,6 +9,10 @@ User=pubhub
 Group=pubhub
 ExecStart=/usr/local/bin/pubhub-portal -config /etc/pubhub/portal.toml
 LoadCredential=hub-api-client-secret:/etc/pubhub/credentials/hub-api-client-secret
+LoadCredential=rgw-access-key-id:/etc/pubhub/credentials/rgw-access-key-id
+LoadCredential=rgw-secret-access-key:/etc/pubhub/credentials/rgw-secret-access-key
+CacheDirectory=pubhub
+CacheDirectoryMode=0700
 Restart=on-failure
 RestartSec=2s
 
