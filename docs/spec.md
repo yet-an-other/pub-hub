@@ -1,0 +1,827 @@
+# pub-hub handoff spec
+
+This spec assembles pub-hub's design so it can be sliced into implementation issues. It restates decisions and decides nothing new: each statement cites the ticket or ADR where it was decided. Terms follow [CONTEXT.md]. Where a source was loose, the reading the spec takes is listed in §13 so the owner can overrule it. Open questions are tickets on the map, [#1]. When this spec was assembled, the only open one was [#17].
+
+## 1. Overview
+
+pub-hub is a minimal, single-tenant hub for publishing short-lived static HTML pages and minisites at stable, public but non-indexed URLs, with an authenticated Portal to publish and browse them ([CONTEXT.md]).
+
+**Fixed constraints** ([#1]):
+
+- Single tenant: the owner and their agents publish. Readers are anonymous.
+- Home server, no Docker. The Go Portal, oauth2-proxy and (later) `cloudflared` run directly under systemd.
+- Manually configured nginx terminates TLS.
+- Storage goes through the generic S3 API only: Ceph RGW sits behind it, but no RGW-specific features are used.
+- Zitadel on the LAN is the IdP. oauth2-proxy handles the browser.
+- Portal login and agent publishing are LAN/VPN-only for now. The design must not preclude opening them later.
+- Backend in Go, at least 1.25 for `net/http.CrossOriginProtection` ([#2]). The Portal UI is a TS + Vite + React + Tailwind SPA embedded in the Go binary with `go:embed`, so the Portal is one deployable unit.
+- Minimalism over features. Artifacts are strictly static: no Markdown rendering, no backends, no history.
+
+**Components.** Everything runs on the RGW host and reaches RGW over loopback ([#14]).
+
+```
+Owner browser ─┐                          ┌─ /oauth2/…           → oauth2-proxy ─→ Zitadel (LAN)
+               ├─→ nginx  hub.bdgn.me  ───┼─ /  and  /ui/api/…   → auth_request, then Portal
+Agent / CLI ───┘   (LAN/VPN only)         ├─ /api/…              → Portal ─→ Zitadel introspection
+                                          └─ /healthz, /readyz   → Portal
+                                                                    │ the Portal writes both buckets
+                                                                    ▼
+Reader (LAN) ──────────────────→ nginx  pub.bdgn.me ── GET/HEAD ──→ RGW  pubhub-artifacts  (anonymous GetObject)
+Reader (internet, later) → Cloudflare → cloudflared ─┘                   pubhub-meta       (private)
+```
+
+**Deliverables in this repo:**
+
+| Deliverable | Where | Decided in |
+|---|---|---|
+| Portal: one Go binary with the embedded SPA, run as `pubhub-portal` | not fixed | [#1], [#14] |
+| Naming and path-validation package shared by the Portal and the CLI | not fixed | [#10] |
+| `pubhub` CLI | `cmd/pubhub` | [#10] |
+| Agent skill | `skill/pubhub-publish/SKILL.md` | [#10] |
+| systemd units, both nginx server blocks, example configs | `deploy/` | [#14] |
+| Runbook: install, upgrade, provisioning, rollback | `docs/deploy.md` | [#14] |
+
+**Out of scope** ([#1], [#14], [#15]):
+
+- Backups of the buckets. They are the S3 layer's concern (§12.4).
+- Artifact expiry or TTL.
+- Server-side Markdown → HTML conversion.
+- Per-Artifact backends or server-side state.
+- Version history of republished Artifacts.
+- Multi-tenant permissions or per-Project ACLs.
+- Unguessable or secret URLs.
+- A Prometheus `/metrics` endpoint, for now.
+- How files reach the host, and TLS certificates.
+
+## 2. URL layout and naming
+
+### 2.1 Hosts
+
+| Host | Serves | Reachable from |
+|---|---|---|
+| `hub.bdgn.me` | The Portal alone: SPA, both API prefixes, oauth2-proxy endpoints, health | LAN/VPN only: internal DNS, nginx `allow` for the LAN and VPN ranges, then `deny all` ([#14]) |
+| `pub.bdgn.me` | Artifacts, at the root | The LAN now, and the internet through Cloudflare Tunnel later ([#13], [#14]) |
+
+- The Portal and the Artifacts sit on sibling hosts. The same-site risk is accepted, and a separate registrable domain was declined ([ADR 0002], [#5]).
+- The Artifact hostname is a config value, so moving to a separate domain would change URLs but not the design ([ADR 0002]).
+- There is no `/pub/` prefix. `hub.` never serves Artifact bytes and has no redirect to `pub.` ([#5]).
+- `s3.bdgn.me` carries no pub-hub traffic and stays off every public path, because its `/swift/info` reveals the Ceph version ([#12], [#14]).
+
+### 2.2 Artifact URLs
+
+- A single-file Artifact is `https://pub.bdgn.me/<project>/<category>…/<name>.html`. `.html` is the only allowed extension ([#5]).
+- A Bundle is `https://pub.bdgn.me/<project>/<category>…/<name>/`, with entry point `index.html`. `…/<name>/index.html` also resolves, but `…/<name>/` is canonical ([#5]).
+- Categories are optional and hierarchical: zero or more segments ([CONTEXT.md]).
+- The **stem**, the path without `.html` or `/`, identifies the Artifact.
+  - `plan.html` and `plan/` cannot coexist under one parent. Publishing one while the other exists is a `shape_conflict`.
+  - Changing shape means deleting first and accepting a new URL ([#5], [#8]).
+- There is no move or rename. Publish at the new path and delete the old one. The old URL returns 404, with no redirect ([#8]).
+
+Examples: `pub.bdgn.me/xform/notes/plan.html`, `pub.bdgn.me/xform/roster-sync/`.
+
+### 2.3 Naming rules
+
+These rules cover Project, Category and Artifact names ([#5]):
+
+- Each segment matches `^[a-z0-9]+(-[a-z0-9]+)*$`: 1 to 63 characters, no dots.
+- The whole Artifact path is at most 200 characters.
+- `index` and `cdn-cgi` are reserved at every level:
+  - `index`, because `notes/index.html` would be served at `notes/`, and `<project>/index.html` would amount to a Project-level Artifact ([#6]).
+  - `cdn-cgi`, because Cloudflare owns `/cdn-cgi/` on every proxied hostname, so an Artifact there would be unreachable ([#13], [#14]).
+- The Portal rejects invalid names (`name_invalid`, `name_reserved`) and never rewrites them. Clients may slugify, but the CLI only suggests a fix ([#5], [#10]).
+
+### 2.4 Nesting
+
+- A path prefix is either a Category or an Artifact, never both. Publishing below an Artifact, or at a prefix that already holds Artifacts, is a `nesting_conflict` ([#5], [#8]).
+- There are no Project-level Artifacts: an Artifact always has a name below its Project ([#5]).
+- Projects and Categories are implicit:
+  - A Category exists while it contains an Artifact.
+  - A Project also exists while it carries a description ([#5], [#6]).
+- `pub.bdgn.me/`, `pub.bdgn.me/<project>/` and every Category URL return 404, never a listing ([#5], [#6]).
+
+### 2.5 Files inside a Bundle
+
+The segment rule does not apply to files inside a Bundle ([#5]). They follow their own rules ([#8]):
+
+- Segments are non-empty UTF-8, never `.` or `..`, with no `\` and no control characters.
+- At most 255 bytes per segment and 1,024 bytes per key.
+- Case is preserved, dots are allowed, and duplicates are rejected.
+- Dot-files (any segment starting with `.`) are rejected by the Portal, never silently skipped. Clients skip them before upload.
+- Extensionless files such as `LICENSE` or `CNAME` keep working (§5.5).
+
+### 2.6 Search
+
+- Every response from both hosts, error responses included, carries `X-Robots-Tag: noindex, nofollow`, sent with `always` ([#5]).
+- There is no `robots.txt`, and nginx returns 404 for it, because a `Disallow` would hide the noindex header from crawlers ([#5]).
+- Behind a Cloudflare Free zone, `/robots.txt` returns Cloudflare's comment-only Content Signals file instead. It has no `Disallow`, so the reasoning still holds ([#13]).
+- Nothing lists Artifacts publicly. The Artifact bucket cannot be listed, and the Catalogue exists only on `hub.` ([ADR 0001], [CONTEXT.md]).
+
+## 3. Security model
+
+### 3.1 Threat and invariant
+
+Artifacts are arbitrary HTML and JS. They come from the owner and their agents, but they are treated as untrusted: nothing an Artifact's script does may act with the owner's Portal session ([#2]).
+
+**Invariant: Artifact bytes are only ever served from the Artifact host** ([#2], [ADR 0002]).
+
+- The Portal has no raw, download or preview route.
+- It never renders Artifact HTML on its own origin: no `<iframe srcdoc>` and no `blob:` previews.
+- Catalogue previews are cross-origin iframes of the `pub.` URL.
+- The Catalogue prototype previews mock data through `srcdoc`. That must not carry over.
+
+Why a sibling host ([#2], [ADR 0002]):
+
+- On a shared origin, paths are no boundary. Artifact JS could call the API with the owner's cookie, frame Portal paths and script Portal windows.
+- `CSP: sandbox` contains Artifacts only by breaking storage and workers, and one response without the header means full takeover.
+
+### 3.2 Portal hardening (`hub.`)
+
+- State-changing browser requests pass Go's `http.CrossOriginProtection`, which rejects the `same-site` requests that `pub.` produces ([#2], [#7]).
+  - nginx forwards `Host $host`, so the check's `Origin` fallback compares correctly ([#2]).
+- GET and HEAD requests have no side effects ([#2]).
+- Every `hub.` response carries these headers ([#5], [#7]):
+  - `Cross-Origin-Resource-Policy: same-origin`
+  - `Cross-Origin-Opener-Policy: same-origin`
+  - `Content-Security-Policy: frame-ancestors 'none'`
+  - `X-Content-Type-Options: nosniff`
+  - `X-Robots-Tag: noindex, nofollow`
+- No `hub.` response ever carries a CORS header ([#7]).
+- The session cookie has a `__Host-` name, `SameSite=Lax` and no `Domain`. The prefix stops `pub.` from forging or shadowing it ([#2], [#7]).
+- Machine Publishers use bearer tokens, which browsers never attach on their own ([#2], [ADR 0004]).
+- The Portal listens only on a unix socket that nginx alone can reach. That is why it can trust identity headers (§4.2) ([#7]).
+
+### 3.3 Artifact host hardening (`pub.`)
+
+- There is no auth, no oauth2-proxy and no cookie. nginx strips `Cookie` and `Authorization` before S3 and forwards only an allowlist of request headers ([#7], [#14]).
+- Only GET and HEAD are allowed. Anything else gets `405` ([#14]).
+- Service workers are banned, because a worker would keep serving replaced or deleted Artifacts ([#2], [#5]):
+  - `Service-Worker: script` requests get `403`.
+  - `Service-Worker-Allowed` is never sent.
+- `nosniff` is on every response. Each object's `Content-Type` comes from a fixed extension table, set at upload ([#8], [#14]).
+- `x-amz-*` and `x-rgw-*` response headers are hidden ([#12], [#14]).
+- Artifact requests never fall through to anything authenticated, so Readers never reach an auth redirect ([#3], [#14]).
+- A rate limit applies per Reader IP (§10.4) ([#14]).
+
+### 3.4 Accepted residual risks
+
+| Risk | Accepted in |
+|---|---|
+| `pub.` is same-site with every `*.bdgn.me` service. Artifact JS can toss `Domain=bdgn.me` cookies, including over the cookie of `kuber.bdgn.me`'s oauth2-proxy, which also allows a cookie-bomb DoS. It can also forge requests to any service that relies on SameSite alone for CSRF | [ADR 0002], [#5] |
+| Same-site origins may share a renderer process. CORP and COOP mitigate Spectre-class leaks but don't exclude them | [#2] |
+| An Artifact can imitate the Portal or IdP login page under `bdgn.me` | [#2] |
+| All Artifacts share one origin. One can read or poison another's storage, or script another in a Reader's tab | [#2] |
+| Republishing is not atomic. Readers can see a mix of old and new files during a publish, or after a failed one until it is retried | [ADR 0001] |
+| Every authenticated Publisher has full rights, so an agent could delete everything. An S3-level backup is the mitigation | [ADR 0004], [#7], [#15] |
+
+## 4. Authentication and authorisation
+
+### 4.1 Paths on `hub.bdgn.me`
+
+Paths from [ADR 0004] and [#7], plus the health endpoints from [#15]:
+
+| Path | Goes to | Auth |
+|---|---|---|
+| `/oauth2/…` | oauth2-proxy: sign-in, callback, sign-out | `/oauth2/auth` is `internal` |
+| `/api/…` | Portal, the machine Publisher API | Bearer only, no `auth_request`. nginx sets the identity headers to empty, and the Portal ignores cookies |
+| `/ui/api/…` | Portal, the SPA's API | `auth_request` with the cookie. A missing session gets a JSON `401`, and the SPA reloads |
+| `/healthz`, `/readyz` | Portal, health | None (still LAN/VPN-only) |
+| `/` (everything else) | Portal: SPA shell, assets, client routes | `auth_request`. A missing session gets a `302` to `/oauth2/sign_in` |
+
+The same Go handlers are mounted under `/api/` and `/ui/api/`, and only the authentication middleware differs, so there is one API (§6). Two prefixes exist because nginx `auth_request` cannot accept "cookie or bearer" on one path ([ADR 0004]).
+
+### 4.2 Browser sign-in (the owner)
+
+- oauth2-proxy runs as an `auth_request` sidecar, not as a reverse proxy, so uploads never pass through it ([#3], [#7]).
+  - Version at least v7.15.2, since earlier versions have critical auth bypasses ([#3]).
+- `provider = "oidc"` against the Zitadel web app `hub-browser`: code flow, Basic auth, PKCE S256 ([#3], [#14]).
+- The cookie has a `__Host-` name, `SameSite=Lax` and `session_cookie_minimal`, with a fixed 12 h `cookie_expire` and no refresh ([#7]).
+- The owner is checked three times ([#7]):
+  1. Zitadel: the `pub-hub` project has "Check Role Assignment on Authentication", and only the owner holds the `owner` role.
+  2. oauth2-proxy: `authenticated_emails_file` lists only the owner. Avoid Zitadel's example settings `email_domains = ["*"]` and `user_id_claim = "sub"` ([#3]).
+  3. The Portal: `X-Auth-Request-Email` must equal the configured owner email.
+- nginx sets `X-Auth-Request-User` and `X-Auth-Request-Email` in every Portal location, either to the `auth_request` values or to empty, so a client can never supply them ([#7]).
+- Sign-out is `/oauth2/sign_out` ([#9]). [r-auth] §2.2 shows how to end the Zitadel session too, since a minimal session cookie keeps no ID token.
+
+### 4.3 Machine Publishers
+
+From [ADR 0004] and [#7]:
+
+- **Credentials:**
+  - Each agent host has its own Zitadel service account, and so does the owner's own CLI.
+  - Each account holds a PAT with a one-year expiry. The owner follows this as a policy; the Portal doesn't enforce it.
+- **Clients** send `Authorization: Bearer <PAT>` to `https://hub.bdgn.me/api/…` and never talk to Zitadel.
+- **The Portal:**
+  - It introspects each PAT through its own Zitadel API app, `hub-api`, and caches the result for 60 s, keyed by the token's hash.
+  - Zitadel reports any PAT in the instance as active, so the Portal admits a token only if its account's user id is on the **allowlist** in Portal config ([#3]). The allowlist maps user id → label.
+  - Changing the allowlist means a Portal restart. Artifacts keep being served meanwhile.
+- **Rejected** ([ADR 0004]):
+  - Portal-minted API keys.
+  - Client credentials or private-key JWT.
+  - One prefix with header-based routing in nginx.
+
+### 4.4 Auth outcomes
+
+| Situation | Answer |
+|---|---|
+| Missing or invalid token | `401 unauthenticated` |
+| Valid PAT whose account is not on the allowlist | `403 forbidden` |
+| Zitadel unreachable during introspection (transport failure) | `503 idp_unavailable`, retryable. Cached results keep working for 60 s |
+| Browser session missing or expired | `/ui/api/`: JSON `401`, and the SPA reloads. `/`: `302` to sign-in |
+
+Existing browser sessions last until they expire, even while Zitadel is down ([#7], [#8]).
+
+### 4.5 Authorisation and identity
+
+- Every authenticated Publisher has full rights: publish, replace, delete and edit descriptions, anywhere. There are no per-credential scopes ([ADR 0004], [#7]).
+- The **Publisher label**, recorded as "last Publisher", is the allowlist label for a machine Publisher and the owner's email for a publish from the Catalogue ([#7]).
+- `GET /api/whoami` returns the caller's label ([#8]).
+
+## 5. Storage and serving
+
+### 5.1 Buckets
+
+There are two buckets on RGW, and both names are config values ([ADR 0001], [ADR 0003], [#14]):
+
+| Bucket | Holds | Access |
+|---|---|---|
+| `pubhub-artifacts` | Artifact bytes. The object key is the Reader path without its leading `/`: `xform/notes/plan.html`, `xform/roster-sync/index.html` | Anonymous `s3:GetObject` only, no `ListBucket`. Only the Portal writes |
+| `pubhub-meta` | One JSON record per Artifact, plus Project records | Private, Portal only |
+
+- The Portal sets each object's `Content-Type` at upload, and S3's ETag is the validator ([ADR 0001]).
+- Versioning is off on both buckets, so deletes are immediate and final ([ADR 0001]).
+- There is no Portal-wide quota. An RGW bucket quota is a deployment choice ([#8]).
+- The host keeps no state. The durable state is exactly the two buckets plus host config ([ADR 0003], [#15]).
+
+### 5.2 Records
+
+An Artifact's record is keyed by its stem: `xform/notes/plan.json` covers `xform/notes/plan.html` or `xform/notes/plan/`, so stem uniqueness is key uniqueness ([ADR 0003]).
+
+| Field | Rule ([#6]) |
+|---|---|
+| path | The identity. The kind follows from the `.html` suffix |
+| title | Taken from the entry HTML's `<title>` at each publish, falling back to the name. Never passed in |
+| description | See below |
+| created at | Set at the first publish and kept across republishes |
+| updated at | The last publish |
+| last Publisher | The Publisher label (§4.5) |
+| total size, file count | Computed at publish |
+| state | `publishing` or `published` |
+
+Records don't store the file list, tags or publish history ([#6]). For the file list, the Portal lists `…/<name>/` in the Artifact bucket, and the no-nesting rule guarantees everything under it belongs to that Artifact.
+
+**Artifact description** ([#6]):
+
+- Plain text, optional, at most 1,000 characters.
+- It is private: never shown on `pub.`, and always rendered escaped.
+- The Publisher sets it at publish time, and it can be edited later without republishing.
+- On republish, omitting it leaves it unchanged, supplying it replaces it, and supplying an empty value clears it.
+- It is never extracted from the HTML.
+
+**Project description** ([#6]):
+
+- It lives in an optional top-level `<project>.json` that holds only the description.
+- It can be set before anything is published into the Project.
+- It survives deleting the Project's last Artifact, and is removed by clearing the description.
+- A described Project with no Artifacts shows in the Catalogue as empty, while `pub.bdgn.me/<project>/` stays 404.
+- Categories carry no description.
+
+### 5.3 Portal state and concurrency
+
+- At startup the Portal lists and loads every record into memory. The metadata bucket is the Catalogue's source of truth ([ADR 0003]).
+- Exactly one Portal process writes. Running two against the same buckets is unsupported ([ADR 0003]).
+- One in-process lock covers the nesting checks and record writes ([ADR 0003], [#8]).
+- Each Artifact has an in-memory in-flight marker ([#8]):
+  - While a publish, delete or description edit of an Artifact runs, any other mutation of it gets `409 busy` with `Retry-After: 5`.
+  - Different Artifacts proceed in parallel.
+  - The marker is never persisted, so a record left in `publishing` after a crash blocks nothing. Publishing again fixes it.
+
+### 5.4 Publish and delete sequences
+
+**Publish (create or replace)** ([ADR 0001], [ADR 0003], [#8]):
+
+1. Spool the whole request to a temp directory (`/var/cache/pubhub/spool`), bounded by the size cap.
+2. Validate everything: names and path rules, limits, `index.html` present in a Bundle, the title extracted. An invalid upload never touches the live Artifact.
+3. Write the record as `publishing`, before the first byte.
+4. Upload every file except the entry, then the entry (`index.html` or the single file).
+5. Delete leftovers: files under the Bundle that are absent from the new set.
+6. Mark the record `published`.
+
+The request is synchronous and returns once the publish is complete. A crash leaves the record in `publishing`, which the Catalogue shows as incomplete, and publishing again repairs it. No reconcile loop is needed, because a live byte never exists without a record ([ADR 0003]).
+
+**Delete** ([ADR 0001], [ADR 0003]):
+
+1. Remove the entry first, so the Artifact returns 404 at once.
+2. Remove the other files.
+3. Remove the record.
+
+Deletion is immediate and final: a plain `404`, the name reusable at once, and no tombstones.
+
+**Open:** what the record says while a delete is in progress. As specified, a crash between removing the bytes and removing the record leaves a `published` record for an Artifact Readers can no longer reach ([#17]).
+
+### 5.5 Serving
+
+nginx proxies Artifact requests straight to `pubhub-artifacts` over loopback. The Portal is not on the Reader's path, so Readers don't depend on it being up ([ADR 0001], [#11], [#14]).
+
+The `pub.` server block handles requests like this ([#5], [#11], [#14]):
+
+- `Service-Worker: script` gets `403`.
+- Methods other than GET and HEAD get `405`.
+- Lookup:
+  1. A path ending in `/` is looked up as `…/index.html`. Any other path is looked up as its exact key.
+  2. On a miss, a path whose last segment has no dot gets a `301` that adds `/`.
+     - The `Location` is relative (`absolute_redirect off`), so it never leaks the tunnel listener's port ([#13]).
+     - Only this redirect path costs a second S3 round-trip.
+  3. S3's `403` for a missing key becomes `404`.
+
+### 5.6 Caching
+
+From [#11], [#13] and [#14]:
+
+- Every `pub.` response carries `Cache-Control: no-cache, no-transform`, sent with `always`, so `301`, `403` and `404` responses carry it too.
+- The S3 ETag is the validator, and `If-None-Match` → `304` passes through.
+- nginx uses no `proxy_cache`. A CDN therefore never serves stale Artifacts and needs no purge.
+- nginx strips `W/` from `If-None-Match` before RGW. nginx gzip and Cloudflare compression both weaken ETags, and RGW compares them byte-wise.
+- A page load that straddles a republish may mix versions. This is accepted ([ADR 0001]).
+
+### 5.7 S3 client
+
+From [#12] and [#14]. RGW is Ceph 19.2.3 Squid. Upgrading to 19.2.5 or later is recommended but not required.
+
+- Use aws-sdk-go-v2 `service/s3`, built with `s3.New` and explicit options:
+  - path-style addressing, region `default`;
+  - `RequestChecksumCalculation` and `ResponseChecksumValidation` both set to `WhenRequired`.
+- The endpoint is RGW at `127.0.0.1:<rgw port>`, bypassing `s3.bdgn.me`.
+- Why the checksum pin matters:
+  - With SDK defaults over HTTPS, PutObject sends `aws-chunked` with a trailing CRC32.
+  - RGW 19.2.3 then stores and serves `Content-Encoding: aws-chunked` to Readers. This is fixed in 19.2.4.
+  - A guard test must cover this, and it has to run over TLS, because plain HTTP does not reproduce it.
+- One PutObject per file, with no multipart. A single PUT covers the 100 MB cap.
+- ListObjectsV2 by prefix, paginated.
+- DeleteObjects in chunks of at most 1,000 keys.
+- A missing record surfaces as `*types.NoSuchKey`.
+- The ranked alternative is minio-go v7 with `DisableMultipart: true`.
+
+## 6. Publish API
+
+### 6.1 Endpoints
+
+The API path equals the Artifact's public path: `pub.bdgn.me/xform/notes/plan.html` ↔ `/api/artifacts/xform/notes/plan.html` ([#8]). Every endpoint is also served under `/ui/api/` for the SPA (§4.1).
+
+| Call | Does |
+|---|---|
+| `PUT /api/artifacts/<path>.html` or `…/<path>/` | Publish or replace. The shape comes from the suffix |
+| `GET /api/artifacts/<path>.html` or `…/<path>/` | Metadata, including the `pub.` URL |
+| `PATCH /api/artifacts/<path>.html` or `…/<path>/` | `{"description": …}`, a metadata-only edit |
+| `DELETE /api/artifacts/<path>.html` or `…/<path>/` | Delete, `204` |
+| `GET /api/artifacts?prefix=…` | List, with no pagination (the list is in memory and single-tenant) |
+| `GET /api/projects` | Projects with their description and Artifact count, including empty described ones |
+| `PATCH /api/projects/<project>` | `{"description": …}`, where an empty value clears it |
+| `GET /api/whoami` | The caller's Publisher label |
+
+- Paths are strict: `…/plan` without a suffix is a `404`.
+- There is no version prefix. Changes stay additive.
+- There is no move or rename.
+- Artifact metadata, from both `GET` and the list, carries: path, `pub.` URL, title, description, created and updated times, last Publisher, total size, file count and state ([#6], [#8]).
+
+### 6.2 Upload
+
+From [#8]:
+
+- Both shapes upload as `multipart/form-data`: an optional `description` text field, then one part per file. Each file part's field name is the file's path relative to the Artifact root.
+- A single-file publish has exactly one file part. A Bundle must include `index.html`.
+- There is no archive format, so symlinks, hard links, devices and zip-slip cannot occur.
+- Paths inside a Bundle follow §2.5.
+- Each stored object's `Content-Type` comes from its extension through a fixed table: html, css, js/mjs, json, svg, png, jpg, gif, webp, avif, ico, woff/woff2, txt, xml, wasm, pdf, map, and so on.
+  - Unknown extensions get `application/octet-stream`.
+  - No file is rejected for its type.
+
+### 6.3 Overwrite and conditions
+
+From [#8]:
+
+- `PUT` answers `201` on create and `200` on replace, with the metadata and URL in the body.
+- `If-None-Match: *` means create only. If the Artifact already exists, the answer is `412 exists`.
+- There is no `If-Match`.
+- A crashed publish leaves the Artifact in `publishing`. Publishing again retries it ([#6]).
+
+### 6.4 Limits
+
+- Each publish is capped at 100 MB for the whole request and 2,000 files per Bundle, with no per-file cap ([#8]).
+- nginx `client_max_body_size` on both API prefixes sits slightly above the cap ([#8]).
+- A description is at most 1,000 characters ([#6]).
+
+### 6.5 Errors
+
+Every error is `{"error": {"code": "…", "message": "…"}}` with a stable code ([#8]).
+
+| Status | Codes |
+|---|---|
+| `400` | `name_invalid`, `name_reserved`, `path_invalid`, `request_invalid` |
+| `401` / `403` | `unauthenticated`, `forbidden` |
+| `404` | `not_found` |
+| `409` | `shape_conflict`, `nesting_conflict`, `busy` (retryable, with `Retry-After: 5`) |
+| `412` | `exists` |
+| `413` | `too_large`, `too_many_files` |
+| `422` | `index_missing`, `file_count` |
+| `503` | `idp_unavailable`, `storage_unavailable` (retryable) |
+
+## 7. Catalogue UI
+
+The Catalogue is the Portal SPA at `hub.bdgn.me/`, calling the API under `/ui/api/`. It is one wide inventory list grouped by Project. This is variant B of the second prototype round ([#9]; [prototype]: open `catalogue-v2.prototype.html?variant=B`).
+
+### 7.1 Page
+
+- A top bar with the pub-hub mark, "Private Catalogue", the total size and Artifact count, the owner's email, and Sign out (`/oauth2/sign_out`).
+- A heading "Published Artifacts" with the count, a **Publish** button, and the note "Descriptions are private".
+- An incomplete banner when any Artifact is in `publishing`. Its "Show" link switches the filter to Incomplete.
+- Search with a `/` shortcut, covering Projects, paths, titles, descriptions and Publishers, plus **All / Incomplete** filter buttons.
+
+### 7.2 The list
+
+- **Project header**: the name, `/<project>/`, the Artifact count, and the Project description.
+  - The description is click-to-edit, one line, and can be cleared.
+  - An empty described Project shows "No Artifacts yet".
+- **Order**: Projects by most recent activity, with empty ones last.
+- **Categories**: sub-headings inside each Project. Artifacts directly under the Project come first.
+- **Compact row**:
+  - a kind icon (file or Bundle);
+  - the title;
+  - the name (`auth-seam.html` / `roster-sync/`);
+  - an Incomplete badge when relevant;
+  - a one-line description;
+  - the updated date and the size.
+
+### 7.3 Expanded row
+
+Clicking a row toggles it open:
+
+- A thumbnail preview: a scaled cross-origin iframe of the live `pub.` URL, loaded only on expand (§3.1). Clicking it opens the Artifact.
+- The full URL, with copy-link and open buttons.
+- The full description, click-to-edit, plain text up to 1,000 characters.
+- "Updated … by <Publisher>", the created time, the file count and the size.
+- For an incomplete Artifact, a note that Readers may see mixed files.
+- **Publish new version** opens the publish form in place, with the path fixed.
+- **Delete** asks for confirmation in the row: "Readers get 404 at once; there is no undo".
+
+### 7.4 Publishing from the browser
+
+- **Opening the form**:
+  - Drag a file or folder onto a Project or Category heading, which highlights. The publish form opens right under that heading with the path prefilled.
+  - The page's **Publish** button opens the same form at the top of the list, with an empty path.
+- **The form shows** the dropped or chosen item: its kind, file count, size, `<title>`, and any dot-files skipped. Dot-files are skipped before sending ([#8]).
+- **The path** is a single editable field under `pub.bdgn.me/`, with live validation, conflict detection and a replace notice.
+- **Other fields**:
+  - an optional description ("leave empty to keep" when replacing);
+  - a "don't overwrite" checkbox, which sends `If-None-Match: *`;
+  - a progress bar, since the upload returns only when the publish has finished.
+- **Errors** show their API code and message. A Retry button appears for `busy` and `503`.
+
+### 7.5 Session
+
+- A `401` from `/ui/api/` means the 12 h session has expired, and the SPA reloads to go through sign-in ([#7]).
+- State-changing calls are same-origin, so they pass `http.CrossOriginProtection` ([#7]).
+
+The Catalogue has no move or rename, no bulk actions, no alternative sort orders and no activity feed ([#9], [#15]).
+
+## 8. Publishing client: `pubhub`
+
+### 8.1 Delivery
+
+From [#10]:
+
+- `cmd/pubhub` in this repo, a single static Go binary.
+- It shares the naming and path-validation package with the Portal, so the client and the server can't disagree about a path.
+- It is installed with `go install …/cmd/pubhub@latest`. Release binaries can come later.
+- Rejected: a curl shell script, Python and Node.
+
+### 8.2 Commands
+
+```
+pubhub publish <file|dir> <project>/<category…>/<name> [-d "description"] [--no-overwrite] [--dry-run] [--json]
+pubhub list [prefix] [--json]
+pubhub delete <path> [--yes]
+pubhub whoami
+pubhub login
+```
+
+From [#10]:
+
+- The target is the stem, and the source decides the shape: a file becomes `<name>.html`, a directory becomes `<name>/`. An explicit `.html` or `/` is accepted if it matches the source.
+- `--no-overwrite` sends `If-None-Match: *`.
+- `--dry-run` validates locally and prints what would be uploaded (count, size, `<title>`, anything skipped) without calling the API.
+- There are no commands yet for editing descriptions or Project descriptions. The API's `PATCH` makes them easy to add later.
+
+### 8.3 Credentials
+
+From [#10]:
+
+- `PUBHUB_TOKEN` and `PUBHUB_URL` (default `https://hub.bdgn.me`) take precedence.
+- Otherwise the CLI reads `$XDG_CONFIG_HOME/pubhub/config.toml`, mode `0600`, and refuses to read it if the group or others can read it.
+- `pubhub login` prompts for the PAT without echo, checks it with `whoami`, then writes the file.
+- There is no OS keyring. The PAT comes from Zitadel's console, one service account per host (§10.6).
+
+### 8.4 Output and exit codes
+
+From [#10]:
+
+- On success, stdout carries only the URL. `--json` prints the full API metadata instead.
+- Progress, warnings and skipped files go to stderr.
+- Errors print as `error: <code>: <message>`, using the API's codes.
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Anything else |
+| `2` | Usage or local validation error |
+| `3` | Conflict: `shape_conflict`, `nesting_conflict`, `exists` |
+| `4` | Auth: `401`, `403` |
+| `5` | Still `busy` or `503` after 3 retries, which honour `Retry-After` |
+
+### 8.5 Client-side safety
+
+From [#10]:
+
+- Before any upload, the CLI validates the target, the limits (100 MB, 2,000 files) and the presence of `index.html` in a Bundle.
+- It never rewrites a target. For an invalid name it suggests a fix.
+- It skips dot-files and reports how many on stderr.
+- It **skips symlinks and never follows them**, with a warning.
+- It warns, without failing, when `index.html` references absolute `/…` paths, and suggests a relative build base (Vite `base: './'`), because a Bundle lives under a sub-path ([#2]).
+
+## 9. Agent skill
+
+The skill is `skill/pubhub-publish/SKILL.md` in this repo, and the owner installs it into their agents ([#10]).
+
+- It is used **only when the user explicitly asks** to publish or share.
+- **Before publishing** ([#5], [#10]):
+  - It converts Markdown to a self-contained HTML page.
+  - It makes sure the page has a meaningful `<title>`, which becomes the Catalogue title.
+  - It builds sites with a relative base, without a service worker or PWA.
+- **Path**:
+  - The Project is the current git repo name, slugified.
+  - The agent picks the Category and name and states the path it chose.
+  - It asks only when there is no repo or the choice is unclear.
+  - The naming rules apply, including the reserved names (§2.3).
+- It **always passes `--no-overwrite`** unless the user said to update an existing Artifact. On `exists` or a conflict, it asks the user.
+- It writes a one-line, private `-d` description saying what the page is and why it was made.
+- It returns the URL, noting that the page is public but unlisted.
+- On an auth error, it points to `pubhub login` or the allowlist.
+
+## 10. Deployment
+
+Everything runs on the RGW host under systemd, with no Docker ([#14]).
+
+- The repo ships `deploy/`, with the systemd units, both nginx server blocks and example configs.
+- It also ships `docs/deploy.md`, the runbook: install; upgrade (build, copy the binary, restart); provisioning; rollback.
+- How these files reach the host, by hand or through the owner's IaC, stays outside pub-hub.
+- TLS certificates stay outside too: both hosts use the owner's existing `*.bdgn.me` certificate process.
+- An interactive setup wizard is possible later but not planned.
+
+### 10.1 Processes
+
+| Unit | Runs as, listens on | Notes |
+|---|---|---|
+| `pubhub-portal` | User `pubhub`. `/run/pubhub/portal.sock`, mode `0660`, with nginx in its group | Spool `/var/cache/pubhub/spool`, emptied at start. `ProtectSystem=strict`, `NoNewPrivileges`. Config changes take effect on restart |
+| `oauth2-proxy`, v7.15.2 or later | `/run/oauth2-proxy/o2p.sock`, mode `0660`, nginx group | **No `ExecReload`**: oauth2-proxy has no SIGHUP handler, so a reload would silently stop it. Startup needs Zitadel for OIDC discovery, so rely on `Restart=on-failure` ([#3]) |
+| `cloudflared` | Added only at tunnel go-live (§11) | |
+
+oauth2-proxy always trusts forwarded headers from unix-socket peers, so the socket's permissions are the trust boundary ([#3]).
+
+### 10.2 Config and secrets
+
+- **`/etc/pubhub/portal.toml`** holds the Portal's non-secret config ([#14]):
+  - the owner email;
+  - the bucket names and the RGW endpoint;
+  - the `pub.` base URL;
+  - the Publisher allowlist, as `user id = "label"` pairs.
+- **Portal secrets** arrive via `LoadCredential=` from root-only files in `/etc/pubhub/credentials/` ([#14]):
+  - the RGW keys of user `pub-hub`;
+  - the `hub-api` client secret.
+- **oauth2-proxy secrets**, the client secret and the cookie secret, also arrive via `LoadCredential` ([#3], [#14]). The cookie secret is raw 16, 24 or 32 bytes with no trailing newline ([#3]).
+- `authenticated_emails_file` holds only the owner ([#14]).
+- Every party uses the same canonical Zitadel hostname, because Zitadel derives the issuer from the `Host` header ([#3]).
+
+### 10.3 nginx `hub.bdgn.me`
+
+- Internal DNS only, with no public record. nginx `allow`s the LAN and VPN ranges, then `deny all` ([#14]).
+- Locations as in §4.1.
+  - `/oauth2/auth` is `internal`, with the request body off and `X-Forwarded-Uri` forced. This is the GHSA-7x63 mitigation ([#3]).
+- Every location that proxies to the Portal forwards `Host $host` and sets `X-Auth-Request-User`/`-Email` exactly once, to the `auth_request` values or to empty ([#2], [#7]).
+- `client_max_body_size` sits slightly above 100 MB on `/api/` and `/ui/api/` ([#8]).
+- The response headers from §3.2 go on every response.
+- Before go-live, send a forged `X-Auth-Request-Email` and confirm it never reaches the Portal on any location ([r-auth] §6).
+
+### 10.4 nginx `pub.bdgn.me`
+
+From [#13] and [#14]:
+
+- **DNS**: internal now. The public record is added only at tunnel go-live.
+- **Listeners**: `443 ssl` on the LAN. Later, a tunnel-only `127.0.0.1:8081` with no other `server` on it.
+- **Proxying**: to RGW over loopback, forwarding only an allowlist of request headers: `Range`, `If-None-Match` (with `W/` stripped via a `map`) and `If-Modified-Since`.
+- **Requests and headers**:
+  - Request handling follows §5.5.
+  - Response headers follow §2.6, §3.3 and §5.6, all sent with `always`.
+  - `absolute_redirect off`.
+- **Real client IP** on the tunnel listener: `set_real_ip_from 127.0.0.1` and `real_ip_header CF-Connecting-IP`. Check with `nginx -V` that the realip module is present.
+- **gzip** for text types.
+- **Rate limit**: a per-Reader-IP `limit_req` of about 20 r/s, burst 40.
+
+### 10.5 RGW provisioning
+
+From [#12] and [#14]. The plain commands go in `docs/deploy.md`.
+
+- **Users**:
+  - A provisioning-only user, `pub-hub-owner`, creates `pubhub-artifacts` and `pubhub-meta` and owns their policies and Public Access Blocks.
+  - The Portal's user, `pub-hub`, gets `s3:ListBucket`, `GetObject`, `PutObject` and `DeleteObject` on both buckets, only through bucket-policy statements (`"Principal": {"AWS": "arn:aws:iam:::user/pub-hub"}`).
+  - It also gets `radosgw-admin user modify --uid=pub-hub --max-buckets=-1`. Its keys then cannot change policies or Public Access Blocks, or create or delete buckets.
+- **Order**:
+  1. `pubhub-artifacts`: a policy holding the Portal grant and one `Allow` of `s3:GetObject` to `"Principal": "*"` on `…/*`. Optionally, a Public Access Block with only `IgnorePublicAcls: true`.
+  2. `pubhub-meta`: the Portal grant first, then the Public Access Block `{BlockPublicAcls: false, IgnorePublicAcls: true, BlockPublicPolicy: true, RestrictPublicBuckets: true}`.
+- **Two Squid bugs**:
+  - **Never set `BlockPublicAcls: true`.** On 19.2.0–19.2.4 it makes every PutObject return `403`.
+  - `BlockPublicPolicy: true` refuses every `Allow` policy on Squid. Policies therefore go first, and the flag must be lifted before a policy changes.
+- **Expected result**: anonymous listing, ACL reads, PUT, DELETE and missing keys on `pubhub-artifacts` all get `403` ([#12]).
+
+### 10.6 Zitadel provisioning
+
+From [#3], [#7] and [#14]:
+
+- A `pub-hub` project with "Check Role Assignment on Authentication", and the `owner` role granted to the owner.
+- Web app `hub-browser`: code flow, Basic auth, PKCE S256, callback `https://hub.bdgn.me/oauth2/callback`.
+- API app `hub-api`, for the Portal's introspection.
+- One service account per agent host, each with a one-year PAT and an allowlist entry.
+
+## 11. Public exposure through Cloudflare Tunnel
+
+This applies only when `pub.` goes public ([#13], [#14]). `hub.` never appears in the tunnel.
+
+### 11.1 Tunnel
+
+- The tunnel is locally-managed, so its routes live in a file on the host:
+  - `pub.bdgn.me` → `http://127.0.0.1:8081`, the tunnel-only listener;
+  - then a catch-all `http_status:404`, which is what `hub.bdgn.me` gets.
+- `cloudflared` runs under our own unit, not `cloudflared service install`:
+  - `DynamicUser`;
+  - the tunnel's `<UUID>.json` via `LoadCredential` (`TUNNEL_CRED_FILE=%d/…`);
+  - `--no-autoupdate`, with updates through the package manager.
+- `cert.pem` is account-wide and needed only to create the tunnel and its DNS route, so it never goes on the server.
+- Firewall: egress TCP/UDP 7844 only, and no inbound ports.
+
+### 11.2 Cloudflare settings (go-live checklist)
+
+**For `pub.bdgn.me`:**
+
+- DNS: `pub` → the tunnel, proxied. No public `hub` record points at the tunnel.
+- A Cache Rule `http.host eq "pub.bdgn.me"` → **Bypass cache**. With it, every request reaches nginx, the service-worker ban always applies, and no purge is ever needed.
+- Features that rewrite or inject into HTML are off: Automatic HTTPS Rewrites, Email Obfuscation, Rocket Loader, Fonts, RUM auto-injection, Markdown for Agents, and the "Add security headers" Managed Transform.
+
+**Zone-wide, accepted knowing they also affect the other proxied `*.bdgn.me` hosts ([#14]):**
+
+- Always Online off, since it sends URLs to the Internet Archive.
+- Crawler Hints off.
+- Browser Cache TTL set to "Respect Existing Headers".
+- Speed Brain off.
+- Replace insecure JS off.
+- Bot Fight Mode off. AI Labyrinth and managed `robots.txt` are also off ([#13]).
+
+The full checklist and the post-deployment `curl` checks are in [r-tunnel] §3 and §7.
+
+### 11.3 After go-live
+
+- A tunnel outage shows Readers Cloudflare error 1016 ([#15]).
+- `/robots.txt` behaves as described in §2.6.
+
+## 12. Operations
+
+All from [#15].
+
+### 12.1 Logging
+
+- The Portal logs structured JSON with Go `slog` to stdout, which ends up in the systemd journal.
+- **Logged**:
+  - publish, replace and delete, with path, Publisher label, file count, bytes and duration;
+  - description edits;
+  - authentication failures (`401`/`403`), with the reason and the token's `sub` when introspection returned one;
+  - `busy` and `503`;
+  - a startup summary of records loaded and how many are incomplete.
+- **Never logged**: tokens, cookies, request bodies.
+- nginx keeps its normal access logs for both hosts. The `pub.` logs record Reader IPs, and rotation stays at the system default.
+- There is no separate audit store and no activity feed in the Catalogue.
+
+### 12.2 Health
+
+- `GET /healthz` answers when the process is up.
+- `GET /readyz` checks that both buckets are reachable and reports whether Zitadel introspection is reachable. It returns `503` only if S3 is down. Zitadel being down is reported but doesn't fail it.
+- nginx exposes both on `hub.` without `auth_request`. They are still LAN/VPN-only and reveal nothing beyond up or down.
+
+### 12.3 Monitoring
+
+- The owner's uptime monitor checks `https://hub.bdgn.me/readyz` and one known Artifact URL on `pub.`.
+- Once `pub.` is public, an external check of that URL also catches tunnel outages.
+- There is no Prometheus `/metrics` endpoint for now. `cloudflared` already exposes its own metrics on `127.0.0.1:20241`–`20245`.
+
+### 12.4 Backups and restore
+
+- Backups are out of scope for pub-hub. Whatever backs up RGW should snapshot `pubhub-artifacts` and `pubhub-meta` from the same point in time, since records are written before bytes ([ADR 0003]).
+- Host config in `/etc/pubhub/` and `/etc/oauth2-proxy/` is the rest of the durable state.
+- That backup is also the mitigation for the accepted risk that an agent deletes everything ([#7]).
+- A single deleted Artifact can be brought back from any copy with `pubhub publish <copy> <path>`. Only its original created time is lost.
+- The spool is transient and needs no backup ([#14]).
+
+## 13. Assembly notes
+
+### 13.1 Superseded and refined sources
+
+- [#4] recommended that the Portal stream from a private bucket, with an atomic pointer flip. That was declined in favour of [ADR 0001] ([#11]). The map's Decisions-so-far line for [#4] describes the recommendation, not the design.
+- [#2] recommended falling back to a separate registrable domain. That fallback was declined ([ADR 0002]).
+- [ADR 0003] says one lock serialises "all mutations and nesting checks". [#8] narrows that: the shared lock covers nesting checks and record writes, byte transfers for different Artifacts run in parallel, and a second mutation of the same Artifact gets `409 busy`. The spec follows [#8]. This refines the ADR rather than contradicting it.
+- [ADR 0001]'s "concurrent publishes to the same Artifact are serialised by the Portal" is realised as `409 busy`, not as a queue ([#8]).
+
+### 13.2 Readings
+
+Where a source was loose, the spec reads it as follows. The owner can overrule any of these in review.
+
+1. `422 file_count` is a single-file publish without exactly one file part.
+2. A violation of the rules for paths inside a Bundle (§2.5) returns `400 path_invalid`. `request_invalid` covers malformed requests: bad multipart, bad JSON, an over-long description.
+3. The field name of a single-file publish's one file part carries no meaning. The object key is the Artifact path.
+4. `pubhub delete <path>` takes the Artifact path with its suffix, as `pubhub list` prints it and as the API requires.
+5. A single-file source must be an `.html` file, since a single-file Artifact is one ([CONTEXT.md]). Anything else is a local validation error (exit `2`).
+6. `portal.toml` also needs the Zitadel issuer URL and the `hub-api` client id for introspection. [#14] lists the other fields.
+7. `/healthz` and `/readyz` are exact locations on `hub.` alongside the [ADR 0004] table ([#15]).
+8. A Project's "most recent activity" is the latest `updated at` among its Artifacts.
+
+### 13.3 Left to implementation
+
+None of these was decided anywhere, and none is a design question:
+
+- The JSON field names of records and API bodies.
+- The exact content-type table beyond the listed types.
+- Title extraction details: entities, whitespace, length.
+- The CLI's human-readable `list` format.
+- How the SPA learns the `pub.` base URL before any Artifact exists. Any API addition stays additive.
+- The Portal's source layout beyond the paths in §1.
+- nginx proxy timeouts, which must allow a synchronous publish of 100 MB or 2,000 files.
+
+### 13.4 Open
+
+- [#17] Crash visibility for a delete in progress (§5.4).
+
+## Sources
+
+**Map:** [#1] Map: pub-hub, minimal portal for publishing short-lived HTML Artifacts.
+
+**Tickets:**
+
+- [#2] Containing untrusted Artifacts on the Portal's origin (research)
+- [#3] Zitadel + oauth2-proxy + nginx for browser and machine auth (research)
+- [#4] Serving and atomically replacing Artifacts on generic S3 (research; superseded by [ADR 0001])
+- [#5] Artifact host, URL layout and naming rules
+- [#6] Artifact metadata model and store
+- [#7] Authentication topology for the Portal and machine Publishers
+- [#8] Publish API contract
+- [#9] Catalogue UI (prototype)
+- [#10] Publishing CLI and agent-skill contract
+- [#11] Artifact serving path, caching and retention
+- [#12] S3 client for the deployed Ceph RGW (research)
+- [#13] Public exposure of pub.bdgn.me via Cloudflare Tunnel (research)
+- [#14] Deployment on the home server: units, nginx, secrets, provisioning
+- [#15] Backups and observability
+- [#17] Crash visibility for a delete in progress (open)
+
+**ADRs:**
+
+- [ADR 0001] nginx serves Artifacts straight from S3; republish is not atomic
+- [ADR 0002] Artifacts on a sibling host, not the Portal's host or a separate domain
+- [ADR 0003] Artifact metadata as JSON records in a private S3 bucket, held in memory
+- [ADR 0004] Machine Publishers use Zitadel PATs introspected by the Portal; one API behind two auth prefixes
+
+**Research write-ups**, on their branches: [r-containment], [r-auth], [r-s3-serving], [r-s3-client], [r-tunnel].
+
+**Prototype:** [prototype], throwaway branch `prototype/catalogue-ui` at `268b080`.
+
+[CONTEXT.md]: ../CONTEXT.md
+[ADR 0001]: adr/0001-nginx-serves-artifacts-straight-from-s3.md
+[ADR 0002]: adr/0002-artifacts-on-a-sibling-host.md
+[ADR 0003]: adr/0003-artifact-metadata-in-a-private-s3-bucket.md
+[ADR 0004]: adr/0004-machine-publishers-use-introspected-zitadel-pats.md
+[#1]: https://github.com/yet-an-other/pub-hub/issues/1
+[#2]: https://github.com/yet-an-other/pub-hub/issues/2
+[#3]: https://github.com/yet-an-other/pub-hub/issues/3
+[#4]: https://github.com/yet-an-other/pub-hub/issues/4
+[#5]: https://github.com/yet-an-other/pub-hub/issues/5
+[#6]: https://github.com/yet-an-other/pub-hub/issues/6
+[#7]: https://github.com/yet-an-other/pub-hub/issues/7
+[#8]: https://github.com/yet-an-other/pub-hub/issues/8
+[#9]: https://github.com/yet-an-other/pub-hub/issues/9
+[#10]: https://github.com/yet-an-other/pub-hub/issues/10
+[#11]: https://github.com/yet-an-other/pub-hub/issues/11
+[#12]: https://github.com/yet-an-other/pub-hub/issues/12
+[#13]: https://github.com/yet-an-other/pub-hub/issues/13
+[#14]: https://github.com/yet-an-other/pub-hub/issues/14
+[#15]: https://github.com/yet-an-other/pub-hub/issues/15
+[#17]: https://github.com/yet-an-other/pub-hub/issues/17
+[r-containment]: https://github.com/yet-an-other/pub-hub/blob/research/artifact-containment/docs/research/artifact-containment.md
+[r-auth]: https://github.com/yet-an-other/pub-hub/blob/research/zitadel-oauth2-proxy-auth/docs/research/zitadel-oauth2-proxy-auth.md
+[r-s3-serving]: https://github.com/yet-an-other/pub-hub/blob/research/s3-serving-and-replace/docs/research/s3-serving-and-replace.md
+[r-s3-client]: https://github.com/yet-an-other/pub-hub/blob/research/s3-client-for-rgw/docs/research/s3-client-for-rgw.md
+[r-tunnel]: https://github.com/yet-an-other/pub-hub/blob/research/cloudflare-tunnel-exposure/docs/research/cloudflare-tunnel-exposure.md
+[prototype]: https://github.com/yet-an-other/pub-hub/tree/268b080/web/prototype
