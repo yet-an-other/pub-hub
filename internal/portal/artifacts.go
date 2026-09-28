@@ -24,6 +24,7 @@ import (
 
 const (
 	maxPublishBytes       = 100 << 20
+	maxBundleFiles        = 2000
 	readinessProbeTimeout = 3 * time.Second
 	spoolDirectory        = "/var/cache/pubhub/spool"
 )
@@ -32,6 +33,7 @@ type artifactStore interface {
 	LoadRecords(context.Context) ([]json.RawMessage, error)
 	PutRecord(context.Context, string, []byte) error
 	PutArtifact(context.Context, string, io.Reader, int64, string) error
+	DeleteLeftovers(context.Context, string, map[string]struct{}) error
 	CheckBuckets(context.Context) (artifactsErr, metadataErr error)
 }
 
@@ -120,9 +122,6 @@ func (a *application) prepareSpool() error {
 		return fmt.Errorf("read upload spool: %w", err)
 	}
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), "publish-") {
-			continue
-		}
 		if err := os.RemoveAll(filepath.Join(a.spoolDir, entry.Name())); err != nil {
 			return fmt.Errorf("clear upload spool: %w", err)
 		}
@@ -314,10 +313,6 @@ func (a *application) artifact(w http.ResponseWriter, r *http.Request, path stri
 		writeNameError(w, err)
 		return
 	}
-	if parsed.Kind != naming.SingleFile {
-		auth.WriteError(w, http.StatusNotFound, "not_found", "resource not found")
-		return
-	}
 	if r.Method == http.MethodGet {
 		a.getArtifact(w, r, parsed)
 		return
@@ -359,6 +354,10 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 	defer a.release(stem)
 
 	started := time.Now()
+	if path.Kind == naming.Bundle {
+		a.publishBundle(w, r, path, publisher.Label, started)
+		return
+	}
 	file, size, err := a.spoolSingleFile(w, r)
 	if err != nil {
 		writeUploadError(w, err)
@@ -380,6 +379,10 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 	a.mu.RLock()
 	previous, exists := a.records[stem]
 	a.mu.RUnlock()
+	if exists && previous.Path != path.PublicPath() {
+		auth.WriteError(w, http.StatusConflict, "shape_conflict", "Artifact shape conflicts with existing record")
+		return
+	}
 	createdAt := updatedAt
 	if exists {
 		createdAt = previous.CreatedAt
@@ -492,6 +495,12 @@ func writeUploadError(w http.ResponseWriter, err error) {
 		auth.WriteError(w, http.StatusRequestEntityTooLarge, "too_large", "Publish request exceeds 100 MB")
 	case errors.Is(err, errTooLarge):
 		auth.WriteError(w, http.StatusRequestEntityTooLarge, "too_large", "Publish request exceeds 100 MB")
+	case errors.Is(err, errTooManyFiles):
+		auth.WriteError(w, http.StatusRequestEntityTooLarge, "too_many_files", "Bundle exceeds 2,000 files")
+	case errors.Is(err, errPathInvalid):
+		auth.WriteError(w, http.StatusBadRequest, "path_invalid", "Invalid Bundle file path")
+	case errors.Is(err, errIndexMissing):
+		auth.WriteError(w, http.StatusUnprocessableEntity, "index_missing", "Bundle requires index.html")
 	case errors.Is(err, errFileCount):
 		auth.WriteError(w, http.StatusUnprocessableEntity, "file_count", "Single-file Artifacts require exactly one file")
 	case errors.Is(err, errSpoolFailure):
@@ -505,6 +514,9 @@ var (
 	errTooLarge     = errors.New("publish request too large")
 	errFileCount    = errors.New("single-file publish requires exactly one file")
 	errSpoolFailure = errors.New("upload spool failed")
+	errTooManyFiles = errors.New("too many Bundle files")
+	errPathInvalid  = errors.New("invalid Bundle path")
+	errIndexMissing = errors.New("Bundle index missing")
 )
 
 func (a *application) spoolSingleFile(w http.ResponseWriter, r *http.Request) (*os.File, int64, error) {

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +140,36 @@ func TestSingleFilePublishAgainstS3CompatibleServer(t *testing.T) {
 	ready := artifactRequest(t, handler, http.MethodGet, "/readyz", nil, "")
 	if ready.Code != http.StatusOK {
 		t.Errorf("readyz = %d %s, want 200", ready.Code, ready.Body)
+	}
+
+	// Bundle replacement must paginate the listing and batch deletion of more
+	// than one ListObjectsV2 page of leftovers.
+	bundle := bundleRequest(t, handler, map[string]string{"index.html": "<title>Bundle</title>", "old.css": "body{}"})
+	if bundle.Code != http.StatusCreated {
+		t.Fatalf("publish Bundle = %d %s", bundle.Code, bundle.Body)
+	}
+	bulkCtx, cancelBulk := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancelBulk()
+	for i := 0; i < 1001; i++ {
+		key := "xform/demo/old-" + strconv.Itoa(i) + ".txt"
+		_, err := client.PutObject(bulkCtx, &s3.PutObjectInput{Bucket: aws.String(artifactBucket), Key: aws.String(key), Body: strings.NewReader("old")})
+		if err != nil {
+			t.Fatalf("seed leftover %d: %v", i, err)
+		}
+	}
+	bundle = bundleRequest(t, handler, map[string]string{"index.html": "<title>Replaced</title>", "LICENSE": "hello"})
+	if bundle.Code != http.StatusOK {
+		t.Fatalf("replace Bundle = %d %s", bundle.Code, bundle.Body)
+	}
+	if got := decodeArtifact(t, bundle); got.FileCount != 2 || got.Title != "Replaced" {
+		t.Errorf("Bundle metadata = %+v", got)
+	}
+	objects, err := client.ListObjectsV2(bulkCtx, &s3.ListObjectsV2Input{Bucket: aws.String(artifactBucket), Prefix: aws.String("xform/demo/")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objects.Contents) != 2 {
+		t.Errorf("Bundle objects after replacement = %d, want 2", len(objects.Contents))
 	}
 
 	restarted := newApplication(store, "https://pub.example.test", t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))

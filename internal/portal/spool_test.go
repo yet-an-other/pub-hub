@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-func TestPrepareSpoolClearsOnlyPortalUploadFiles(t *testing.T) {
+func TestPrepareSpoolEmptiesSpoolAtStartup(t *testing.T) {
 	spool := t.TempDir()
 	for name, content := range map[string]string{
 		"publish-stale": "partial upload",
-		"keep.txt":      "not owned by the spool",
+		"keep.txt":      "stale data",
 	} {
 		if err := os.WriteFile(filepath.Join(spool, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
@@ -25,7 +25,7 @@ func TestPrepareSpoolClearsOnlyPortalUploadFiles(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(spool, "publish-stale")); !os.IsNotExist(err) {
 		t.Errorf("stale upload still exists (stat error %v)", err)
 	}
-	if contents, err := os.ReadFile(filepath.Join(spool, "keep.txt")); err != nil || string(contents) != "not owned by the spool" {
-		t.Errorf("unrelated spool file = %q, err=%v", contents, err)
+	if _, err := os.Stat(filepath.Join(spool, "keep.txt")); !os.IsNotExist(err) {
+		t.Errorf("stale spool file still exists (stat error %v)", err)
 	}
 }

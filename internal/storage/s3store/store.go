@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 const maxRecordSize = 1 << 20
@@ -84,6 +85,46 @@ func (s *Store) PutArtifact(ctx context.Context, key string, body io.Reader, siz
 		ContentType:   aws.String(contentType),
 	})
 	return err
+}
+
+// DeleteLeftovers removes keys under prefix not present in keep. Listing is
+// paginated and each delete is limited to S3's 1,000-key maximum.
+func (s *Store) DeleteLeftovers(ctx context.Context, prefix string, keep map[string]struct{}) error {
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.artifactBucket), Prefix: aws.String(prefix),
+	})
+	var leftovers []types.ObjectIdentifier
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("list Bundle objects: %w", err)
+		}
+		for _, object := range page.Contents {
+			if object.Key == nil {
+				continue
+			}
+			if _, ok := keep[*object.Key]; !ok {
+				leftovers = append(leftovers, types.ObjectIdentifier{Key: object.Key})
+			}
+		}
+	}
+	for len(leftovers) > 0 {
+		chunk := leftovers
+		if len(chunk) > 1000 {
+			chunk = chunk[:1000]
+		}
+		result, err := s.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(s.artifactBucket), Delete: &types.Delete{Objects: chunk, Quiet: aws.Bool(true)},
+		})
+		if err != nil {
+			return fmt.Errorf("delete Bundle leftovers: %w", err)
+		}
+		if len(result.Errors) > 0 {
+			return fmt.Errorf("delete Bundle leftover %q: %s", aws.ToString(result.Errors[0].Key), aws.ToString(result.Errors[0].Code))
+		}
+		leftovers = leftovers[len(chunk):]
+	}
+	return nil
 }
 
 // PutRecord stores an Artifact record in the private metadata bucket.

@@ -24,6 +24,7 @@ type memoryArtifactStore struct {
 	objects               map[string][]byte
 	contentTypes          map[string]string
 	recordWriteOrder      []string
+	objectKeys            []string
 	loadRecordsError      error
 	incompleteBeforeWrite bool
 	objectWriteError      error
@@ -77,6 +78,7 @@ func (s *memoryArtifactStore) PutArtifact(_ context.Context, key string, body io
 	}
 	s.incompleteBeforeWrite = metadata.State == "incomplete"
 	s.recordWriteOrder = append(s.recordWriteOrder, "object")
+	s.objectKeys = append(s.objectKeys, key)
 	started := s.objectWriteStarted
 	release := s.releaseObjectWrites
 	block := s.blockObjectWrites
@@ -95,6 +97,20 @@ func (s *memoryArtifactStore) PutArtifact(_ context.Context, key string, body io
 	s.objects[key] = content
 	s.contentTypes[key] = contentType
 	s.mu.Unlock()
+	return nil
+}
+
+func (s *memoryArtifactStore) DeleteLeftovers(_ context.Context, prefix string, keep map[string]struct{}) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.objects {
+		if strings.HasPrefix(key, prefix) {
+			if _, ok := keep[key]; !ok {
+				delete(s.objects, key)
+				delete(s.contentTypes, key)
+			}
+		}
+	}
 	return nil
 }
 
@@ -133,6 +149,10 @@ func newArtifactHandler(t *testing.T, store *memoryArtifactStore) http.Handler {
 }
 
 func newArtifactHandlerWithDiscoveryStatus(t *testing.T, store *memoryArtifactStore, discoveryStatus int) http.Handler {
+	return newArtifactHandlerWithSpool(t, store, discoveryStatus, t.TempDir())
+}
+
+func newArtifactHandlerWithSpool(t *testing.T, store *memoryArtifactStore, discoveryStatus int, spool string) http.Handler {
 	t.Helper()
 	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -150,7 +170,7 @@ func newArtifactHandlerWithDiscoveryStatus(t *testing.T, store *memoryArtifactSt
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}
-	app := newApplication(store, "https://pub.bdgn.me", t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	app := newApplication(store, "https://pub.bdgn.me", spool, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := app.prepareSpool(); err != nil {
 		t.Fatalf("prepareSpool: %v", err)
 	}

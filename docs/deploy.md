@@ -167,6 +167,26 @@ Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#z
 
    Each of the final five commands should fail with `403`; only the first public read succeeds. For `get-object` use a key known not to exist. Do not add a public `ListBucket` grant to make the missing-key response a `404` at RGW.
 
+To check Bundle replacement on the host after upgrading, publish a local directory
+with `index.html` and at least one other file, then remove that other file and
+publish again:
+
+```sh
+curl -f -X PUT -H "Authorization: Bearer $PAT" \
+  -F 'index.html=@demo/index.html' -F 'assets/app.css=@demo/assets/app.css' \
+  https://hub.bdgn.me/api/artifacts/xform/demo/
+rm demo/assets/app.css
+curl -f -X PUT -H "Authorization: Bearer $PAT" \
+  -F 'index.html=@demo/index.html' https://hub.bdgn.me/api/artifacts/xform/demo/
+curl -fsS https://pub.bdgn.me/xform/demo/ >/dev/null  # 200
+# The removed asset must return 404 through the Reader host.
+curl -si https://pub.bdgn.me/xform/demo/assets/app.css
+```
+
+The Portal clears `/var/cache/pubhub/spool` at startup and after each request.
+The `/api/` nginx location permits 101 MB bodies and waits up to 900 seconds
+for a synchronous publish.
+
 ## Zitadel machine-Publisher setup
 
 **(owner)** Do these steps in Zitadel before starting the Portal:
