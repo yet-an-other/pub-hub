@@ -35,6 +35,17 @@ func TestBrowserAPIUsesOwnerIdentityAndTheSameHandlers(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigUsesConfiguredReaderHost(t *testing.T) {
+	h := newArtifactHandler(t, newMemoryArtifactStore())
+	r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me/ui/api/config", nil)
+	r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"public_base_url":"https://pub.bdgn.me"`) {
+		t.Errorf("config = %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestBrowserMutationRejectsForeignOriginsIncludingSameSite(t *testing.T) {
 	h := newArtifactHandler(t, newMemoryArtifactStore())
 	for _, origin := range []string{"https://pub.bdgn.me", "https://elsewhere.example"} {
@@ -59,13 +70,34 @@ func TestBrowserMutationRejectsForeignOriginsIncludingSameSite(t *testing.T) {
 	}
 }
 
-func TestPlaceholderDoesNotServeArtifactBytes(t *testing.T) {
+func TestCatalogueShellAndRoutes(t *testing.T) {
 	h := newArtifactHandler(t, newMemoryArtifactStore())
 	r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me/anything", nil)
 	r.Header.Set("X-Auth-Request-Email", "owner@example.test")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "Catalogue is coming soon") {
-		t.Errorf("placeholder = %d: %s", w.Code, w.Body.String())
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "Pub Hub Catalogue") {
+		t.Errorf("catalogue = %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "srcdoc") || strings.Contains(w.Body.String(), "blob:") {
+		t.Fatal("shell contains inline Artifact preview")
+	}
+	for _, path := range []string{"/", "/nested/client/route"} {
+		r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me"+path, nil)
+		r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "Pub Hub Catalogue") {
+			t.Errorf("%s: %d %s", path, w.Code, w.Body.String())
+		}
+	}
+	for _, path := range []string{"/assets/missing.js", "/ui/api/missing"} {
+		r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me"+path, nil)
+		r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%s: got %d, want 404", path, w.Code)
+		}
 	}
 }

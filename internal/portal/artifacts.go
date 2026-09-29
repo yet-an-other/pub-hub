@@ -265,6 +265,16 @@ func (a *application) apiRoutes(w http.ResponseWriter, r *http.Request) {
 		}{Label: publisher.Label})
 		return
 	}
+	if path == "/config" {
+		if r.Method != http.MethodGet {
+			auth.WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+			return
+		}
+		writeJSON(w, http.StatusOK, struct {
+			PublicBaseURL string `json:"public_base_url"`
+		}{a.publicBaseURL})
+		return
+	}
 	if path == "/artifacts" {
 		if r.Method != http.MethodGet {
 			auth.WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")

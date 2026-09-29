@@ -20,8 +20,8 @@ Releases are GitHub Releases, cut by pushing a `v*` tag. Each carries `pubhub-po
 ## Cut a release
 
 ```sh
-git tag v0.9.0
-git push origin v0.9.0
+git tag v0.10.0
+git push origin v0.10.0
 ```
 
 The Release workflow runs vet and tests, then publishes the binaries and checksums.
@@ -253,7 +253,7 @@ The Portal sends `Authorization: Bearer <PAT>` to `/api/` and introspects the PA
 **(owner, host)** Pick the version and the host's architecture (`amd64` or `arm64`), then download and verify:
 
 ```sh
-VERSION=v0.9.0
+VERSION=v0.10.0
 ARCH=amd64
 BASE=https://github.com/yet-an-other/pub-hub/releases/download/$VERSION
 curl -fLO "$BASE/pubhub-portal-linux-$ARCH"
@@ -272,7 +272,7 @@ sudo systemctl restart pubhub-portal
 curl -si https://hub.bdgn.me/healthz
 ```
 
-If the release notes change `portal.toml`, the unit or the nginx server block, install those from the release's tag before restarting. The Portal refuses to start on an unknown or invalid config key and logs why:
+The Catalogue SPA is embedded in the Portal binary; no web assets need installing on the host. After restarting, sign in at `https://hub.bdgn.me/` and check that Artifacts published by the CLI appear in the Catalogue. If the release notes change `portal.toml`, the unit or the nginx server block, install those from the release's tag before restarting. The Portal refuses to start on an unknown or invalid config key and logs why:
 
 ```sh
 journalctl -u pubhub-portal -n 20

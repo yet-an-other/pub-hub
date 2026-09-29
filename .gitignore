@@ -33,3 +33,5 @@ go.work.sum
 
 .pi/
 /dist/
+/web/node_modules/
+/web/*.tsbuildinfo

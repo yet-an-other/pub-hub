@@ -137,14 +137,7 @@ func routes(authenticator *auth.Authenticator, app *application, ownerEmail stri
 	api := http.HandlerFunc(app.apiRoutes)
 	machineAPI := authenticator.Require(http.StripPrefix("/api", api))
 	browserAPI := auth.RequireOwner(ownerEmail, http.NewCrossOriginProtection().Handler(http.StripPrefix("/ui/api", api)))
-	placeholder := auth.RequireOwner(ownerEmail, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Pub Hub</title></head><body><h1>Pub Hub</h1><p>The Catalogue is coming soon.</p></body></html>")
-	}))
+	catalogue := auth.RequireOwner(ownerEmail, catalogueHandler())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.EscapedPath() {
 		case "/healthz":
@@ -168,7 +161,7 @@ func routes(authenticator *auth.Authenticator, app *application, ownerEmail stri
 				browserAPI.ServeHTTP(w, r)
 				return
 			}
-			placeholder.ServeHTTP(w, r)
+			catalogue.ServeHTTP(w, r)
 		}
 	})
 }
