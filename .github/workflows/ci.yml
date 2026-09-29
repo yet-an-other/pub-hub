@@ -21,10 +21,12 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - name: Start local S3-compatible server
+        # MinIO RELEASE.2025-04-22T22-12-26Z, rebuilt from source by coollabsio.
+        # Docker Hub no longer serves minio/minio; pin the mirror by digest.
         run: |
           docker run --detach --name pubhub-test-s3 --publish 9000:9000 \
             --env MINIO_ROOT_USER=pubhubtest \
             --env MINIO_ROOT_PASSWORD=pubhubtest-secret \
             --env MINIO_SITE_REGION=default \
-            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+            ghcr.io/coollabsio/minio@sha256:a4938f37f1be1841b8e7b627ad0207b265345fd0d063e42d7410c78af0e63e68 server /data
       - run: go test -race ./...
