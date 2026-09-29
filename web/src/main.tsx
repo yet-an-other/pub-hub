@@ -3,20 +3,100 @@ import { createRoot } from 'react-dom/client'
 import { groups, type Artifact, type Project } from './catalogue'
 import './style.css'
 
-async function api<T>(path: string): Promise<T> {
-  const response = await fetch('/ui/api/' + path, { credentials: 'same-origin' })
+type ApiFailure = { code: string; message: string; status: number }
+
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  // All mutations stay on the Portal origin so the browser supplies its
+  // same-origin request context for CrossOriginProtection.
+  const response = await fetch('/ui/api/' + path, { ...init, credentials: 'same-origin', mode: 'same-origin' })
   if (response.status === 401) { location.reload(); throw new Error('Session expired') }
-  if (!response.ok) throw new Error(`Could not load ${path} (${response.status})`)
-  return response.json() as Promise<T>
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    const failure: ApiFailure = {
+      code: body?.error?.code || 'request_failed',
+      message: body?.error?.message || `Request failed (${response.status})`,
+      status: response.status,
+    }
+    throw failure
+  }
+  return response.status === 204 ? undefined as T : response.json() as Promise<T>
+}
+
+function failureOf(error: unknown): ApiFailure {
+  if (typeof error === 'object' && error !== null && 'code' in error && 'message' in error && 'status' in error) return error as ApiFailure
+  return { code: 'network_error', message: error instanceof Error ? error.message : String(error), status: 0 }
+}
+
+function MutationError({ failure, retry }: { failure: ApiFailure | null; retry: () => void }) {
+  if (!failure) return null
+  return <p className="mutation-error" role="alert">{failure.code}: {failure.message}{(failure.code === 'busy' || failure.status === 503) && <> <button type="button" onClick={retry}>Retry</button></>}</p>
 }
 
 const size = (n: number) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`
 const date = (s: string) => new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
-function Row({ artifact, base }: { artifact: Artifact; base: string }) {
+function ProjectHeader({ project, changed }: { project: Project; changed: (project: Project) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(project.description)
+  const [pending, setPending] = useState(false)
+  const [failure, setFailure] = useState<ApiFailure | null>(null)
+  async function save() {
+    if (pending) return
+    if (draft === project.description) { setEditing(false); setFailure(null); return }
+    setPending(true)
+    setFailure(null)
+    try {
+      const updated = await api<Project>('projects/' + encodeURIComponent(project.name), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: draft }),
+      })
+      changed(updated)
+      setEditing(false)
+    } catch (error) { setFailure(failureOf(error)) }
+    finally { setPending(false) }
+  }
+  return <div className="project-head"><div><h2>{project.name} <span className="count">{project.artifact_count}</span></h2><code>/{project.name}/</code></div>
+    <div className="project-description">{editing ? <form onSubmit={e => { e.preventDefault(); void save() }}>
+      <label htmlFor={`project-description-${project.name}`}>Project description</label>
+      <input id={`project-description-${project.name}`} type="text" value={draft} disabled={pending} onChange={e => { if (Array.from(e.target.value).length <= 1000) { setDraft(e.target.value); setFailure(null) } }} />
+      <button type="submit" disabled={pending}>Save</button><button type="button" disabled={pending} onClick={() => { setDraft(project.description); setFailure(null); setEditing(false) }}>Cancel</button>
+      <MutationError failure={failure} retry={() => void save()} />
+    </form> : <button className="edit-description" type="button" onClick={() => { setDraft(project.description); setEditing(true) }} aria-label={`Edit ${project.name} Project description`}>{project.description || 'Add a description'} <span aria-hidden="true">✎</span></button>}</div>
+  </div>
+}
+
+function Row({ artifact, base, changed, deleted }: { artifact: Artifact; base: string; changed: (artifact: Artifact) => void; deleted: (path: string) => void }) {
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(artifact.description)
+  const [confirming, setConfirming] = useState(false)
+  const [pending, setPending] = useState(false)
+  const [failure, setFailure] = useState<ApiFailure | null>(null)
   // The URL comes from the configured public host, never the owner-facing host.
   const url = new URL(artifact.path.split('/').map(encodeURIComponent).join('/'), base + '/').href
+  async function save() {
+    if (pending) return
+    if (draft === artifact.description) { setEditing(false); setFailure(null); return }
+    setPending(true)
+    setFailure(null)
+    try {
+      const updated = await api<Artifact>('artifacts/' + artifact.path, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: draft }),
+      })
+      changed(updated)
+      setEditing(false)
+    } catch (error) { setFailure(failureOf(error)) }
+    finally { setPending(false) }
+  }
+  async function remove() {
+    if (pending) return
+    setPending(true)
+    setFailure(null)
+    try {
+      await api<void>('artifacts/' + artifact.path, { method: 'DELETE' })
+      deleted(artifact.path)
+    } catch (error) { setFailure(failureOf(error)) }
+    finally { setPending(false) }
+  }
   return <div className="row">
     <button className="row-button" aria-expanded={open} onClick={() => setOpen(!open)}>
       <span className="kind" aria-hidden="true">{artifact.path.endsWith('/') ? '▣' : '▤'}</span>
@@ -29,9 +109,16 @@ function Row({ artifact, base }: { artifact: Artifact; base: string }) {
         <iframe title={`Preview of ${artifact.title}`} src={url} tabIndex={-1} loading="lazy" sandbox="allow-scripts allow-same-origin" />
       </a>
       <div className="detail-copy"><div className="url"><code>{url}</code><button onClick={() => navigator.clipboard.writeText(url)}>Copy</button><a href={url} target="_blank" rel="noopener noreferrer">Open ↗</a></div>
-        <p className="description">{artifact.description || 'No description'}</p>
+        {editing ? <form className="description-form" onSubmit={e => { e.preventDefault(); void save() }}>
+          <label htmlFor={`artifact-description-${artifact.path}`}>Artifact description</label>
+          <textarea id={`artifact-description-${artifact.path}`} value={draft} disabled={pending} onChange={e => { if (Array.from(e.target.value).length <= 1000) { setDraft(e.target.value); setFailure(null) } }} />
+          <span className="muted">{Array.from(draft).length}/1,000</span>
+          <button type="submit" disabled={pending}>Save</button><button type="button" disabled={pending} onClick={() => { setDraft(artifact.description); setEditing(false); setFailure(null) }}>Cancel</button>
+        </form> : <button className="edit-description description" type="button" onClick={() => { setDraft(artifact.description); setEditing(true); setConfirming(false); setFailure(null) }} aria-label={`Edit description for ${artifact.path}`}>{artifact.description || 'Add a description'} <span aria-hidden="true">✎</span></button>}
         <p className="meta">Updated {date(artifact.updated_at)} by {artifact.last_publisher}<br />Created {date(artifact.created_at)} · {artifact.file_count} {artifact.file_count === 1 ? 'file' : 'files'} · {size(artifact.total_size)}</p>
         {artifact.state === 'incomplete' && <p className="warning">The last publish or delete didn't finish. Readers may see mixed files or 404s. Publish again or delete to finish.</p>}
+        {confirming ? <div className="delete-confirm"><p>Readers get 404 at once; there is no undo</p><button className="danger" type="button" disabled={pending} onClick={() => void remove()}>Confirm delete</button><button type="button" disabled={pending} onClick={() => { setConfirming(false); setFailure(null) }}>Cancel</button></div> : <button className="danger" type="button" disabled={pending} onClick={() => { setConfirming(true); setEditing(false); setFailure(null) }}>Delete Artifact</button>}
+        <MutationError failure={failure} retry={() => void (confirming ? remove() : save())} />
       </div>
     </div>}
   </div>
@@ -44,13 +131,27 @@ function App() {
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [refreshError, setRefreshError] = useState('')
   const [query, setQuery] = useState('')
   const [incomplete, setIncomplete] = useState(false)
   const search = useRef<HTMLInputElement>(null)
+  async function refreshCatalogue() {
+    const [a, p] = await Promise.all([api<Artifact[]>('artifacts'), api<Project[]>('projects')])
+    setArtifacts(a); setProjects(p); setRefreshError('')
+  }
+  function refreshAfterMutation() { void refreshCatalogue().catch(e => setRefreshError(`${failureOf(e).code}: ${failureOf(e).message}`)) }
+  function artifactChanged(updated: Artifact) {
+    setArtifacts(existing => existing.map(item => item.path === updated.path ? updated : item))
+    refreshAfterMutation()
+  }
+  function artifactDeleted(path: string) {
+    setArtifacts(existing => existing.filter(item => item.path !== path))
+    refreshAfterMutation()
+  }
   useEffect(() => {
     Promise.all([api<Artifact[]>('artifacts'), api<Project[]>('projects'), api<{ public_base_url: string }>('config'), api<{ label: string }>('whoami')])
       .then(([a, p, c, me]) => { setArtifacts(a); setProjects(p); setBase(c.public_base_url); setEmail(me.label) })
-      .catch(e => setError(String(e))).finally(() => setLoading(false))
+      .catch(e => setError(`${failureOf(e).code}: ${failureOf(e).message}`)).finally(() => setLoading(false))
   }, [])
   useEffect(() => {
     const shortcut = (e: KeyboardEvent) => {
@@ -63,12 +164,13 @@ function App() {
   const visible = groups(projects, artifacts, query, incomplete)
   return <><header className="top"><div className="top-inner"><span className="mark">p</span><b>pub-hub</b><span className="muted">♙ Private Catalogue</span><span className="spacer" /><span className="muted">{size(artifacts.reduce((sum, a) => sum + a.total_size, 0))} in {artifacts.length} Artifacts</span><span className="divider" /><span className="email">{email}</span><a href="/oauth2/sign_out">Sign out</a></div></header>
     <main><div className="hero"><div><span className="eyebrow">Catalogue</span><h1>Published Artifacts <span className="count">{artifacts.length}</span></h1><p className="muted">Public at {base ? new URL(base).host : 'pub.'}, never indexed or listed.</p></div><span className="muted private">♙ Descriptions are private</span></div>
+      {refreshError && <p role="alert" className="mutation-error">Could not refresh Catalogue: {refreshError} <button type="button" onClick={() => refreshAfterMutation()}>Retry</button></p>}
       {incompleteCount > 0 && <div className="notice">{incompleteCount} {incompleteCount === 1 ? 'Artifact' : 'Artifacts'} didn't finish publishing or deleting. Publish again or delete to finish.<button onClick={() => setIncomplete(true)}>Show →</button></div>}
       <div className="toolbar"><label className="search"><span>⌕</span><input ref={search} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search Projects, paths, titles, descriptions…" aria-label="Search Catalogue" /><kbd>/</kbd></label><button aria-pressed={!incomplete} onClick={() => setIncomplete(false)}>All <small>{artifacts.length}</small></button><button aria-pressed={incomplete} onClick={() => setIncomplete(true)}>Incomplete <small>{incompleteCount}</small></button><span className="spacer" /><span className="muted">{visible.length} Projects</span></div>
-      {loading ? <p role="status">Loading Catalogue…</p> : error ? <p role="alert">{error}</p> : visible.length === 0 ? <p className="empty">No matching Artifacts or Projects.</p> : visible.map(g => <section className="project" key={g.project.name}><div className="project-head"><div><h2>{g.project.name} <span className="count">{g.project.artifact_count}</span></h2><code>/{g.project.name}/</code></div><p>{g.project.description}</p></div>
+      {loading ? <p role="status">Loading Catalogue…</p> : error ? <p role="alert">{error}</p> : visible.length === 0 ? <p className="empty">No matching Artifacts or Projects.</p> : visible.map(g => <section className="project" key={g.project.name}><ProjectHeader project={g.project} changed={updated => { setProjects(existing => existing.map(p => p.name === updated.name ? updated : p)); refreshAfterMutation() }} />
         {!g.artifacts.length && !g.categories.length && <p className="empty">No Artifacts yet</p>}
-        {g.artifacts.map(a => <Row artifact={a} base={base} key={a.path} />)}
-        {g.categories.map(c => <div key={c.name}><h3 className="category">{c.name}</h3>{c.artifacts.map(a => <Row artifact={a} base={base} key={a.path} />)}</div>)}
+        {g.artifacts.map(a => <Row artifact={a} base={base} key={a.path} changed={artifactChanged} deleted={artifactDeleted} />)}
+        {g.categories.map(c => <div key={c.name}><h3 className="category">{c.name}</h3>{c.artifacts.map(a => <Row artifact={a} base={base} key={a.path} changed={artifactChanged} deleted={artifactDeleted} />)}</div>)}
       </section>)}
     </main></>
 }

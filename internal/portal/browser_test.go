@@ -70,6 +70,45 @@ func TestBrowserMutationRejectsForeignOriginsIncludingSameSite(t *testing.T) {
 	}
 }
 
+func TestBrowserCatalogueMutations(t *testing.T) {
+	h := newArtifactHandler(t, newMemoryArtifactStore())
+	if code := describedPublish(t, h, "xform/plan.html", nil); code != http.StatusCreated {
+		t.Fatalf("publish = %d", code)
+	}
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, "https://hub.bdgn.me/ui/api/"+path, strings.NewReader(body))
+		r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+		r.Header.Set("Origin", "https://hub.bdgn.me")
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+		if body != "" {
+			r.Header.Set("Content-Type", "application/json")
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	for _, tc := range []struct{ path, body, expected string }{
+		{"projects/empty", `{"description":"Private"}`, `"description":"Private"`},
+		{"artifacts/xform/plan.html", `{"description":"Draft"}`, `"description":"Draft"`},
+		{"projects/empty", `{"description":""}`, `"description":""`},
+	} {
+		w := request(http.MethodPatch, tc.path, tc.body)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), tc.expected) {
+			t.Errorf("PATCH %s = %d %s", tc.path, w.Code, w.Body.String())
+		}
+	}
+	if w := request(http.MethodGet, "artifacts/xform/plan.html", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"description":"Draft"`) {
+		t.Errorf("updated Artifact = %d %s", w.Code, w.Body.String())
+	}
+	if w := request(http.MethodDelete, "artifacts/xform/plan.html", ""); w.Code != http.StatusNoContent {
+		t.Errorf("DELETE = %d %s", w.Code, w.Body.String())
+	}
+	if w := request(http.MethodGet, "artifacts/xform/plan.html", ""); w.Code != http.StatusNotFound {
+		t.Errorf("deleted Artifact GET = %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestCatalogueShellAndRoutes(t *testing.T) {
 	h := newArtifactHandler(t, newMemoryArtifactStore())
 	r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me/anything", nil)
