@@ -14,7 +14,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/yet-an-other/pub-hub/internal/auth"
-	"github.com/yet-an-other/pub-hub/internal/naming"
 )
 
 type bundleFile struct {
@@ -139,7 +138,8 @@ func (a *application) spoolBundle(w http.ResponseWriter, r *http.Request, prefix
 	return dir, files, total, nil
 }
 
-func (a *application) publishBundle(w http.ResponseWriter, r *http.Request, path naming.ArtifactPath, publisher string, started time.Time) {
+func (a *application) publishBundle(w http.ResponseWriter, r *http.Request, mutation *artifactMutation, publisher string, started time.Time) {
+	path := mutation.path
 	var description *string
 	dir, files, total, err := a.spoolBundle(w, r, path.PublicPath(), &description)
 	if dir != "" {
@@ -149,7 +149,6 @@ func (a *application) publishBundle(w http.ResponseWriter, r *http.Request, path
 		writeUploadError(w, err)
 		return
 	}
-	stem := path.Stem()
 	var entry bundleFile
 	for _, file := range files {
 		if file.key == "index.html" {
@@ -164,63 +163,19 @@ func (a *application) publishBundle(w http.ResponseWriter, r *http.Request, path
 	}
 	title := extractTitle(titleFile, path.Name)
 	_ = titleFile.Close()
-	updatedAt := a.now().UTC()
-	a.mu.RLock()
-	previous, exists := a.records[stem]
-	a.mu.RUnlock()
-	createdAt := updatedAt
-	if exists {
-		createdAt = previous.CreatedAt
-	}
-	value := previous.Description
-	if description != nil {
-		value = *description
-	}
-	record := artifactRecord{Path: path.PublicPath(), Title: title, Description: value, CreatedAt: createdAt, UpdatedAt: updatedAt, LastPublisher: publisher, TotalSize: total, FileCount: len(files), State: "incomplete"}
-	if err := a.putRecord(r.Context(), stem, record, r.Header.Get("If-None-Match") == "*"); err != nil {
-		writeRecordError(w, a, err)
+	view, exists, err := mutation.publish(r.Context(), artifactPublish{
+		title: title, description: description, publisher: publisher,
+		updatedAt: a.now().UTC(), createOnly: r.Header.Get("If-None-Match") == "*",
+		files: files, size: total,
+	})
+	if err != nil {
+		a.writePublishError(w, err, path, publisher)
 		return
 	}
-	uploaded := make(map[string]struct{}, len(files))
-	put := func(file bundleFile) error {
-		key := path.PublicPath() + file.key
-		handle, err := os.Open(file.path)
-		if err != nil {
-			return err
-		}
-		defer handle.Close()
-		if err := a.store.PutArtifact(r.Context(), key, handle, file.size, bundleContentType(file.key)); err != nil {
-			return err
-		}
-		uploaded[key] = struct{}{}
-		return nil
-	}
-	for _, file := range files {
-		if file.key == "index.html" {
-			continue
-		}
-		if err := put(file); err != nil {
-			a.storageUnavailable(w, "upload Bundle file", err)
-			return
-		}
-	}
-	if err := put(entry); err != nil {
-		a.storageUnavailable(w, "upload Bundle entry", err)
-		return
-	}
-	if err := a.store.DeleteLeftovers(r.Context(), path.PublicPath(), uploaded); err != nil {
-		a.storageUnavailable(w, "delete Bundle leftovers", err)
-		return
-	}
-	record.State = "published"
-	if err := a.putRecord(r.Context(), stem, record, false); err != nil {
-		a.storageUnavailable(w, "write published record", err)
-		return
-	}
-	a.log.Info("artifact published", "path", record.Path, "publisher", publisher, "file_count", record.FileCount, "bytes", record.TotalSize, "duration_ms", time.Since(started).Milliseconds())
+	a.log.Info("artifact published", "path", view.Path, "publisher", publisher, "file_count", view.FileCount, "bytes", view.TotalSize, "duration_ms", time.Since(started).Milliseconds())
 	status := http.StatusOK
 	if !exists {
 		status = http.StatusCreated
 	}
-	writeJSON(w, status, a.view(record))
+	writeJSON(w, status, view)
 }

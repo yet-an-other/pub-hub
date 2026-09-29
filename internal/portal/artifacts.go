@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -97,13 +96,11 @@ type application struct {
 	log           *slog.Logger
 	now           func() time.Time
 
-	loadMu sync.Mutex
-	mu     sync.RWMutex
-	loaded bool
-	// records is keyed by the suffix-free Artifact stem.
-	records  map[string]artifactRecord
-	projects map[string]projectRecord
-	inFlight map[string]struct{}
+	loadMu    sync.Mutex
+	mu        sync.RWMutex
+	loaded    bool
+	artifacts *artifactCatalogue
+	projects  map[string]projectRecord
 	// Writes to the metadata bucket and the in-memory index are serialized;
 	// object transfers happen outside this lock.
 	recordWriteMu sync.Mutex
@@ -116,16 +113,16 @@ func newApplication(store artifactStore, publicBaseURL, spoolDir string, log *sl
 	if spoolDir == "" {
 		spoolDir = spoolDirectory
 	}
-	return &application{
+	a := &application{
 		store:         store,
 		publicBaseURL: strings.TrimRight(publicBaseURL, "/"),
 		spoolDir:      spoolDir,
 		log:           log,
 		now:           time.Now,
-		records:       make(map[string]artifactRecord),
 		projects:      make(map[string]projectRecord),
-		inFlight:      make(map[string]struct{}),
 	}
+	a.artifacts = newArtifactCatalogue(store, a.publicBaseURL, &a.recordWriteMu)
+	return a
 }
 
 func (a *application) prepareSpool() error {
@@ -159,10 +156,7 @@ func (a *application) reloadRecords(ctx context.Context) (int, int, error) {
 	alreadyLoaded := a.loaded
 	a.mu.RUnlock()
 	if alreadyLoaded {
-		a.mu.RLock()
-		count := len(a.records)
-		incomplete := countIncomplete(a.records)
-		a.mu.RUnlock()
+		count, incomplete := a.artifacts.counts()
 		return count, incomplete, nil
 	}
 
@@ -170,9 +164,8 @@ func (a *application) reloadRecords(ctx context.Context) (int, int, error) {
 	if err != nil {
 		return 0, 0, fmt.Errorf("load metadata records: %w", err)
 	}
-	records := make(map[string]artifactRecord, len(payloads))
 	projects := make(map[string]projectRecord)
-	incomplete := 0
+	var artifactPayloads []json.RawMessage
 	for _, payload := range payloads {
 		var shape struct {
 			Path    string `json:"path"`
@@ -181,54 +174,28 @@ func (a *application) reloadRecords(ctx context.Context) (int, int, error) {
 		if err := json.Unmarshal(payload, &shape); err != nil {
 			return 0, 0, fmt.Errorf("decode metadata record: %w", err)
 		}
-		if shape.Path == "" {
-			var project projectRecord
-			var fields map[string]json.RawMessage
-			if err := json.Unmarshal(payload, &project); err != nil || json.Unmarshal(payload, &fields) != nil || !validDescription(project.Description) || project.Description == "" || len(fields) != 2 || fields["description"] == nil || fields["project"] == nil || naming.ValidateProject(shape.Project) != nil {
-				return 0, 0, fmt.Errorf("invalid Project metadata record")
-			}
-			if _, exists := projects[shape.Project]; exists {
-				return 0, 0, fmt.Errorf("duplicate Project record %q", shape.Project)
-			}
-			projects[shape.Project] = project
+		if shape.Path != "" {
+			artifactPayloads = append(artifactPayloads, payload)
 			continue
 		}
-		var record artifactRecord
-		if err := json.Unmarshal(payload, &record); err != nil {
-			return 0, 0, fmt.Errorf("decode metadata record: %w", err)
+		project, err := decodeProjectRecord(payload, shape.Project)
+		if err != nil {
+			return 0, 0, err
 		}
-		parsed, err := naming.ParseArtifactPath(record.Path)
-		if err != nil || parsed.Stem() == "" || record.CreatedAt.IsZero() || record.UpdatedAt.IsZero() {
-			return 0, 0, fmt.Errorf("invalid metadata record for path %q", record.Path)
+		if _, exists := projects[shape.Project]; exists {
+			return 0, 0, fmt.Errorf("duplicate Project record %q", shape.Project)
 		}
-		if record.State != "incomplete" && record.State != "published" {
-			return 0, 0, fmt.Errorf("invalid state %q in metadata record for path %q", record.State, record.Path)
-		}
-		stem := parsed.Stem()
-		if _, exists := records[stem]; exists {
-			return 0, 0, fmt.Errorf("duplicate metadata record for path %q", record.Path)
-		}
-		records[stem] = record
-		if record.State == "incomplete" {
-			incomplete++
-		}
+		projects[shape.Project] = project
+	}
+	count, incomplete, err := a.artifacts.load(artifactPayloads)
+	if err != nil {
+		return 0, 0, err
 	}
 	a.mu.Lock()
-	a.records = records
 	a.projects = projects
 	a.loaded = true
 	a.mu.Unlock()
-	return len(records), incomplete, nil
-}
-
-func countIncomplete(records map[string]artifactRecord) int {
-	count := 0
-	for _, record := range records {
-		if record.State == "incomplete" {
-			count++
-		}
-	}
-	return count
+	return count, incomplete, nil
 }
 
 func (a *application) ensureLoaded(ctx context.Context) error {
@@ -335,16 +302,7 @@ func (a *application) listArtifacts(w http.ResponseWriter, r *http.Request) {
 		a.storageUnavailable(w, "load metadata records", err)
 		return
 	}
-	a.mu.RLock()
-	views := make([]artifactView, 0, len(a.records))
-	for _, record := range a.records {
-		if strings.HasPrefix(record.Path, prefix) {
-			views = append(views, a.view(record))
-		}
-	}
-	a.mu.RUnlock()
-	sort.Slice(views, func(i, j int) bool { return views[i].Path < views[j].Path })
-	writeJSON(w, http.StatusOK, views)
+	writeJSON(w, http.StatusOK, a.artifacts.list(prefix))
 }
 
 func (a *application) artifact(w http.ResponseWriter, r *http.Request, path string) {
@@ -377,14 +335,12 @@ func (a *application) getArtifact(w http.ResponseWriter, r *http.Request, path n
 		a.storageUnavailable(w, "load metadata records", err)
 		return
 	}
-	a.mu.RLock()
-	record, ok := a.records[path.Stem()]
-	a.mu.RUnlock()
-	if !ok || record.Path != path.PublicPath() {
+	view, ok := a.artifacts.get(path)
+	if !ok {
 		auth.WriteError(w, http.StatusNotFound, "not_found", "Artifact not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, a.view(record))
+	writeJSON(w, http.StatusOK, view)
 }
 
 func (a *application) deleteArtifact(w http.ResponseWriter, r *http.Request, path naming.ArtifactPath) {
@@ -397,52 +353,27 @@ func (a *application) deleteArtifact(w http.ResponseWriter, r *http.Request, pat
 		a.storageUnavailable(w, "load metadata records", err)
 		return
 	}
-	stem := path.Stem()
-	if !a.claim(stem) {
+	mutation, ok := a.artifacts.beginMutation(path)
+	if !ok {
 		a.log.Warn("artifact mutation busy", "path", path.PublicPath(), "publisher", publisher.Label)
 		w.Header().Set("Retry-After", "5")
 		auth.WriteError(w, http.StatusConflict, "busy", "Artifact mutation already in progress")
 		return
 	}
-	defer a.release(stem)
-
-	a.mu.RLock()
-	record, exists := a.records[stem]
-	a.mu.RUnlock()
-	if !exists || record.Path != path.PublicPath() {
+	defer mutation.release()
+	started := time.Now()
+	record, err := mutation.delete(r.Context())
+	if errors.Is(err, errArtifactMissing) {
 		auth.WriteError(w, http.StatusNotFound, "not_found", "Artifact not found")
 		return
 	}
-	started := time.Now()
-	record.State = "incomplete"
-	if err := a.putRecord(r.Context(), stem, record, false); err != nil {
-		a.storageUnavailable(w, "write incomplete record", err)
-		return
-	}
-	entry := path.PublicPath()
-	if path.Kind == naming.Bundle {
-		entry += "index.html"
-	}
-	if err := a.store.DeleteArtifact(r.Context(), entry); err != nil {
-		a.storageUnavailable(w, "delete Artifact entry", err)
-		return
-	}
-	if path.Kind == naming.Bundle {
-		if err := a.store.DeleteLeftovers(r.Context(), path.PublicPath(), nil); err != nil {
-			a.storageUnavailable(w, "delete Bundle files", err)
-			return
-		}
-	}
-	a.recordWriteMu.Lock()
-	err := a.store.DeleteRecord(r.Context(), stem+".json")
-	if err == nil {
-		a.mu.Lock()
-		delete(a.records, stem)
-		a.mu.Unlock()
-	}
-	a.recordWriteMu.Unlock()
 	if err != nil {
-		a.storageUnavailable(w, "delete Artifact record", err)
+		var failure *artifactStorageError
+		if errors.As(err, &failure) {
+			a.storageUnavailable(w, string(failure.operation), err)
+		} else {
+			a.storageUnavailable(w, "delete Artifact", err)
+		}
 		return
 	}
 	a.log.Info("artifact deleted", "path", record.Path, "publisher", publisher.Label, "file_count", record.FileCount, "bytes", record.TotalSize, "duration_ms", time.Since(started).Milliseconds())
@@ -459,17 +390,17 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 		a.storageUnavailable(w, "load metadata records", err)
 		return
 	}
-	stem := path.Stem()
-	if !a.claim(stem) {
+	mutation, ok := a.artifacts.beginMutation(path)
+	if !ok {
 		w.Header().Set("Retry-After", "5")
 		auth.WriteError(w, http.StatusConflict, "busy", "Artifact mutation already in progress")
 		return
 	}
-	defer a.release(stem)
+	defer mutation.release()
 
 	started := time.Now()
 	if path.Kind == naming.Bundle {
-		a.publishBundle(w, r, path, publisher.Label, started)
+		a.publishBundle(w, r, mutation, publisher.Label, started)
 		return
 	}
 	var description *string
@@ -490,98 +421,39 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 		return
 	}
 
-	updatedAt := a.now().UTC()
-	a.mu.RLock()
-	previous, exists := a.records[stem]
-	a.mu.RUnlock()
-	createdAt := updatedAt
-	if exists {
-		createdAt = previous.CreatedAt
-	}
-	value := previous.Description
-	if description != nil {
-		value = *description
-	}
-	record := artifactRecord{
-		Path:          path.PublicPath(),
-		Title:         title,
-		Description:   value,
-		CreatedAt:     createdAt,
-		UpdatedAt:     updatedAt,
-		LastPublisher: publisher.Label,
-		TotalSize:     size,
-		FileCount:     1,
-		State:         "incomplete",
-	}
-	if err := a.putRecord(r.Context(), stem, record, r.Header.Get("If-None-Match") == "*"); err != nil {
-		writeRecordError(w, a, err)
+	view, exists, err := mutation.publish(r.Context(), artifactPublish{
+		title: title, description: description, publisher: publisher.Label,
+		updatedAt: a.now().UTC(), createOnly: r.Header.Get("If-None-Match") == "*",
+		single: file, size: size,
+	})
+	if err != nil {
+		a.writePublishError(w, err, path, publisher.Label)
 		return
 	}
-
-	if err := a.store.PutArtifact(r.Context(), path.PublicPath(), file, size, "text/html"); err != nil {
-		a.log.Warn("artifact upload failed", "path", path.PublicPath(), "publisher", publisher.Label, "error", err.Error())
-		auth.WriteError(w, http.StatusServiceUnavailable, "storage_unavailable", "Artifact storage is unavailable")
-		return
-	}
-
-	record.State = "published"
-	if err := a.putRecord(r.Context(), stem, record, false); err != nil {
-		a.storageUnavailable(w, "write published record", err)
-		return
-	}
-	a.log.Info("artifact published", "path", record.Path, "publisher", publisher.Label, "file_count", record.FileCount, "bytes", record.TotalSize, "duration_ms", time.Since(started).Milliseconds())
+	a.log.Info("artifact published", "path", view.Path, "publisher", publisher.Label, "file_count", view.FileCount, "bytes", view.TotalSize, "duration_ms", time.Since(started).Milliseconds())
 	status := http.StatusOK
 	if !exists {
 		status = http.StatusCreated
 	}
-	writeJSON(w, status, a.view(record))
+	writeJSON(w, status, view)
 }
 
-var (
-	errNestingConflict = errors.New("Artifact nesting conflict")
-	errShapeConflict   = errors.New("Artifact shape conflict")
-	errExists          = errors.New("Artifact already exists")
-)
-
-func (a *application) nestingConflict(stem string) bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	for other := range a.records {
-		if other != stem && (strings.HasPrefix(stem, other+"/") || strings.HasPrefix(other, stem+"/")) {
-			return true
-		}
+func (a *application) writePublishError(w http.ResponseWriter, err error, path naming.ArtifactPath, publisher string) {
+	var failure *artifactStorageError
+	if !errors.As(err, &failure) {
+		a.storageUnavailable(w, "publish Artifact", err)
+		return
 	}
-	return false
-}
-
-func (a *application) putRecord(ctx context.Context, stem string, record artifactRecord, createOnly bool) error {
-	body, err := json.Marshal(record)
-	if err != nil {
-		return err
+	if failure.operation == opWriteIncomplete {
+		writeRecordError(w, a, err)
+		return
 	}
-	a.recordWriteMu.Lock()
-	defer a.recordWriteMu.Unlock()
-	if record.State == "incomplete" {
-		if a.nestingConflict(stem) {
-			return errNestingConflict
-		}
-		a.mu.RLock()
-		previous, exists := a.records[stem]
-		a.mu.RUnlock()
-		if exists && previous.Path != record.Path {
-			return errShapeConflict
-		}
-		if exists && createOnly {
-			return errExists
-		}
+	if failure.operation == opUploadSingle {
+		a.log.Warn("artifact upload failed", "path", path.PublicPath(), "publisher", publisher, "error", err.Error())
+		auth.WriteError(w, http.StatusServiceUnavailable, "storage_unavailable", "Artifact storage is unavailable")
+		return
 	}
-	if err := a.store.PutRecord(ctx, stem+".json", body); err != nil {
-		return err
-	}
-	a.mu.Lock()
-	a.records[stem] = record
-	a.mu.Unlock()
-	return nil
+	a.storageUnavailable(w, string(failure.operation), err)
 }
 
 func writeRecordError(w http.ResponseWriter, a *application, err error) {
@@ -594,37 +466,6 @@ func writeRecordError(w http.ResponseWriter, a *application, err error) {
 		auth.WriteError(w, http.StatusPreconditionFailed, "exists", "Artifact already exists")
 	default:
 		a.storageUnavailable(w, "write incomplete record", err)
-	}
-}
-
-func (a *application) claim(stem string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if _, exists := a.inFlight[stem]; exists {
-		return false
-	}
-	a.inFlight[stem] = struct{}{}
-	return true
-}
-
-func (a *application) release(stem string) {
-	a.mu.Lock()
-	delete(a.inFlight, stem)
-	a.mu.Unlock()
-}
-
-func (a *application) view(record artifactRecord) artifactView {
-	return artifactView{
-		Path:          record.Path,
-		URL:           a.publicBaseURL + "/" + record.Path,
-		Title:         record.Title,
-		Description:   record.Description,
-		CreatedAt:     record.CreatedAt,
-		UpdatedAt:     record.UpdatedAt,
-		LastPublisher: record.LastPublisher,
-		TotalSize:     record.TotalSize,
-		FileCount:     record.FileCount,
-		State:         record.State,
 	}
 }
 

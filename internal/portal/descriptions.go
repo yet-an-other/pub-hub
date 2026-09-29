@@ -7,7 +7,6 @@ import (
 	"mime"
 	"net/http"
 	"sort"
-	"strings"
 
 	"github.com/yet-an-other/pub-hub/internal/auth"
 	"github.com/yet-an-other/pub-hub/internal/naming"
@@ -57,28 +56,24 @@ func (a *application) patchArtifact(w http.ResponseWriter, r *http.Request, path
 		a.storageUnavailable(w, "load metadata records", err)
 		return
 	}
-	stem := path.Stem()
-	if !a.claim(stem) {
+	mutation, ok := a.artifacts.beginMutation(path)
+	if !ok {
 		w.Header().Set("Retry-After", "5")
 		auth.WriteError(w, 409, "busy", "Artifact mutation already in progress")
 		return
 	}
-	defer a.release(stem)
-	a.mu.RLock()
-	record, exists := a.records[stem]
-	a.mu.RUnlock()
-	if !exists || record.Path != path.PublicPath() {
+	defer mutation.release()
+	view, err := mutation.editDescription(r.Context(), value)
+	if errors.Is(err, errArtifactMissing) {
 		auth.WriteError(w, 404, "not_found", "Artifact not found")
 		return
 	}
-	record.Description = value
-	// Keep the existing state, timestamps, bytes, and publisher.
-	if err := a.putRecord(r.Context(), stem, record, false); err != nil {
+	if err != nil {
 		a.storageUnavailable(w, "edit Artifact description", err)
 		return
 	}
-	a.log.Info("artifact description edited", "path", record.Path, "publisher", publisher.Label)
-	writeJSON(w, 200, a.view(record))
+	a.log.Info("artifact description edited", "path", view.Path, "publisher", publisher.Label)
+	writeJSON(w, 200, view)
 }
 
 func (a *application) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -86,9 +81,7 @@ func (a *application) listProjects(w http.ResponseWriter, r *http.Request) {
 		a.storageUnavailable(w, "load metadata records", err)
 		return
 	}
-	a.mu.RLock()
-	projects := a.projectViewsLocked()
-	a.mu.RUnlock()
+	projects := a.projectViews()
 	result := make([]projectView, 0, len(projects))
 	for _, project := range projects {
 		result = append(result, project)
@@ -97,17 +90,22 @@ func (a *application) listProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, result)
 }
 
-// projectViewsLocked reads both metadata indexes under a.mu.
-func (a *application) projectViewsLocked() map[string]projectView {
-	projects := make(map[string]projectView, len(a.projects))
+func (a *application) projectViews() map[string]projectView {
+	// Metadata writes update their in-memory indexes before releasing this lock.
+	// Hold it across both reads so counts and descriptions share one snapshot.
+	a.recordWriteMu.Lock()
+	defer a.recordWriteMu.Unlock()
+	counts := a.artifacts.projectCounts()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	projects := make(map[string]projectView, len(a.projects)+len(counts))
 	for name, record := range a.projects {
 		projects[name] = projectView{Name: name, Description: record.Description}
 	}
-	for _, record := range a.records {
-		name, _, _ := strings.Cut(record.Path, "/")
+	for name, count := range counts {
 		project := projects[name]
 		project.Name = name
-		project.ArtifactCount++
+		project.ArtifactCount = count
 		projects[name] = project
 	}
 	return projects
@@ -157,13 +155,20 @@ func (a *application) patchProject(w http.ResponseWriter, r *http.Request, name 
 		return
 	}
 	a.log.Info("project description edited", "project", name, "publisher", publisher.Label)
-	a.mu.RLock()
-	project := a.projectViewsLocked()[name]
-	a.mu.RUnlock()
+	project := a.projectViews()[name]
 	// Clearing an empty Project removes it from the list, but PATCH still
 	// returns the Project that was edited.
 	if project.Name == "" {
 		project = projectView{Name: name}
 	}
 	writeJSON(w, 200, project)
+}
+
+func decodeProjectRecord(payload json.RawMessage, name string) (projectRecord, error) {
+	var project projectRecord
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &project); err != nil || json.Unmarshal(payload, &fields) != nil || !validDescription(project.Description) || project.Description == "" || len(fields) != 2 || fields["description"] == nil || fields["project"] == nil || naming.ValidateProject(name) != nil {
+		return projectRecord{}, errors.New("invalid Project metadata record")
+	}
+	return project, nil
 }

@@ -2,12 +2,15 @@ package portal
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func describedPublish(t *testing.T, h http.Handler, path string, description *string) int {
@@ -163,5 +166,64 @@ func TestProjectDescriptions(t *testing.T) {
 		if r.Code != 400 || !strings.Contains(r.Body.String(), code) {
 			t.Errorf("name %q: %d %s", name, r.Code, r.Body)
 		}
+	}
+}
+
+// heldRecordDeleteStore pauses after delete has claimed the Artifact and
+// acquired the shared metadata-write lock, before either index changes.
+type heldRecordDeleteStore struct {
+	*memoryArtifactStore
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *heldRecordDeleteStore) DeleteRecord(ctx context.Context, key string) error {
+	if key == "xform/plan.json" {
+		close(s.started)
+		<-s.release
+	}
+	return s.memoryArtifactStore.DeleteRecord(ctx, key)
+}
+
+func TestProjectSnapshotDuringArtifactDeleteAndProjectPatch(t *testing.T) {
+	store := &heldRecordDeleteStore{memoryArtifactStore: newMemoryArtifactStore(), started: make(chan struct{}), release: make(chan struct{})}
+	app := newApplication(store, "https://pub.bdgn.me", t.TempDir(), nil)
+	h := newHandlerForApplication(t, app, http.StatusOK)
+	if code := describedPublish(t, h, "xform/plan.html", nil); code != http.StatusCreated {
+		t.Fatalf("publish: %d", code)
+	}
+	if r := artifactRequest(t, h, http.MethodPatch, "/api/projects/xform", []byte(`{"description":"Private"}`), "application/json"); r.Code != http.StatusOK {
+		t.Fatalf("patch: %d %s", r.Code, r.Body)
+	}
+	deleted := make(chan *httptest.ResponseRecorder, 1)
+	go func() { deleted <- artifactRequest(t, h, http.MethodDelete, "/api/artifacts/xform/plan.html", nil, "") }()
+	select {
+	case <-store.started:
+	case <-time.After(3 * time.Second):
+		close(store.release)
+		t.Fatal("delete did not reach metadata store")
+	}
+	patched := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		patched <- artifactRequest(t, h, http.MethodPatch, "/api/projects/xform", []byte(`{"description":"Updated"}`), "application/json")
+	}()
+	listed := make(chan *httptest.ResponseRecorder, 1)
+	go func() { listed <- artifactRequest(t, h, http.MethodGet, "/api/projects", nil, "") }()
+	select {
+	case got := <-listed:
+		close(store.release)
+		t.Fatalf("list returned during metadata delete: %d %s", got.Code, got.Body)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(store.release)
+	if got := <-deleted; got.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", got.Code, got.Body)
+	}
+	got := <-listed
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"artifact_count":0`) || (!strings.Contains(got.Body.String(), `"description":"Private"`) && !strings.Contains(got.Body.String(), `"description":"Updated"`)) {
+		t.Fatalf("list after deletion: %d %s", got.Code, got.Body)
+	}
+	if response := <-patched; response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"description":"Updated"`) || !strings.Contains(response.Body.String(), `"artifact_count":0`) {
+		t.Fatalf("patch after deletion: %d %s", response.Code, response.Body)
 	}
 }
