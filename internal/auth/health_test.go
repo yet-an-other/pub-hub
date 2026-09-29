@@ -11,7 +11,7 @@ import (
 	"github.com/yet-an-other/pub-hub/internal/auth"
 )
 
-func TestIDPReachableChecksOIDCDiscoveryWithoutFailingStorageReadiness(t *testing.T) {
+func TestIDPReachableChecksOIDCDiscovery(t *testing.T) {
 	status := http.StatusOK
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/.well-known/openid-configuration" {

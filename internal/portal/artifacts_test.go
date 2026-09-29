@@ -455,6 +455,13 @@ func TestPathConflictsLeaveRecordsAndBytesUntouched(t *testing.T) {
 			if first := publish(tc.first); first.Code != http.StatusCreated {
 				t.Fatalf("initial PUT = %d %s", first.Code, first.Body)
 			}
+			stem := strings.TrimSuffix(strings.TrimSuffix(tc.first, ".html"), "/")
+			key := tc.first
+			if strings.HasSuffix(key, "/") {
+				key += "index.html"
+			}
+			beforeRecord, _ := store.record(stem + ".json")
+			beforeBytes, _, _ := store.object(key)
 			store.mu.Lock()
 			writes := len(store.recordWriteOrder)
 			store.mu.Unlock()
@@ -464,8 +471,12 @@ func TestPathConflictsLeaveRecordsAndBytesUntouched(t *testing.T) {
 			}
 			store.mu.Lock()
 			defer store.mu.Unlock()
-			if len(store.recordWriteOrder) != writes || len(store.records) != 1 || len(store.objects) != 1 {
+			if len(store.recordWriteOrder) != writes || len(store.records) != 1 || len(store.objects) != 1 || !bytes.Equal(store.objects[key], beforeBytes) {
 				t.Errorf("conflict touched storage: order=%v records=%v objects=%v", store.recordWriteOrder, store.records, store.objects)
+			}
+			var afterRecord artifactRecord
+			if err := json.Unmarshal(store.records[stem+".json"], &afterRecord); err != nil || afterRecord != beforeRecord {
+				t.Errorf("conflict changed record: before=%+v after=%+v err=%v", beforeRecord, afterRecord, err)
 			}
 		})
 	}

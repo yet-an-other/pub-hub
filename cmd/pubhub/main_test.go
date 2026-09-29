@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,7 +30,7 @@ func TestPublish(t *testing.T) {
 	calls := 0
 	c, out, stderr, done := fake(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if r.URL.Path != "/api/artifacts/proj/demo/" || r.Header.Get("If-None-Match") != "*" || r.Header.Get("Authorization") != "Bearer test-pat" {
+		if r.URL.Path != "/api/artifacts/proj/demo/" || (r.Header.Get("If-None-Match") == "*") != (calls == 1) || r.Header.Get("Authorization") != "Bearer test-pat" {
 			t.Errorf("request: %s %v", r.URL, r.Header)
 		}
 		reader, err := r.MultipartReader()
@@ -55,6 +54,9 @@ func TestPublish(t *testing.T) {
 		if len(fields) != 2 || fields["style.css"] != "css" || fields["index.html"] == "" {
 			t.Errorf("parts: %v", fields)
 		}
+		if calls == 1 {
+			w.WriteHeader(http.StatusCreated)
+		}
 		fmt.Fprint(w, `{"url":"https://pub.bdgn.me/proj/demo/","file_count":2}`)
 	})
 	defer done()
@@ -67,8 +69,15 @@ func TestPublish(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Skipped 1") || !strings.Contains(stderr.String(), "relative base") {
 		t.Fatal(stderr.String())
 	}
-	if calls != 1 {
-		t.Fatal(calls)
+	out.Reset()
+	if exit := c.run([]string{"publish", dir, "proj/demo", "--json"}); exit != 0 {
+		t.Fatalf("JSON exit %d: %s", exit, stderr)
+	}
+	if got := out.String(); got != "{\"url\":\"https://pub.bdgn.me/proj/demo/\",\"file_count\":2}\n" {
+		t.Errorf("JSON output = %q", got)
+	}
+	if calls != 2 {
+		t.Fatalf("publish calls = %d, want 2", calls)
 	}
 }
 func TestDryRunAndValidation(t *testing.T) {
@@ -157,16 +166,6 @@ func TestLocalLimitsAndMissingEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := inspect(dir, "proj/demo", ""); err == nil || !strings.Contains(err.Error(), "too_large") {
-		t.Fatal(err)
-	}
-}
-func TestJSON(t *testing.T) {
-	var out bytes.Buffer
-	if err := jsonOutput(&out, []byte(`{"url":"x", "state":"published"}`)); err != nil {
-		t.Fatal(err)
-	}
-	var value map[string]string
-	if err := json.Unmarshal(out.Bytes(), &value); err != nil || value["state"] != "published" {
 		t.Fatal(err)
 	}
 }

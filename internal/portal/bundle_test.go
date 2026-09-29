@@ -167,29 +167,25 @@ func TestBundleDescriptionCanBeSetPreservedAndCleared(t *testing.T) {
 	}
 }
 
-func TestBundleRejectsNestedArtifactsAndFullKeyOverflow(t *testing.T) {
+func TestBundleRejectsFullObjectKeyOverflowWithoutChangingLiveArtifact(t *testing.T) {
 	store := newMemoryArtifactStore()
 	handler := newArtifactHandler(t, store)
-	if response := bundleRequest(t, handler, map[string]string{"index.html": "parent"}); response.Code != 201 {
+	if response := bundleRequest(t, handler, map[string]string{"index.html": "old"}); response.Code != http.StatusCreated {
 		t.Fatal(response.Body)
 	}
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	part, _ := writer.CreateFormFile("index.html", "index.html")
-	_, _ = io.WriteString(part, "child")
-	_ = writer.Close()
-	child := artifactRequest(t, handler, http.MethodPut, "/api/artifacts/xform/demo/child/", body.Bytes(), writer.FormDataContentType())
-	if child.Code != 409 || !strings.Contains(child.Body.String(), `"code":"nesting_conflict"`) {
-		t.Errorf("nested Bundle: %d %s", child.Code, child.Body)
-	}
+	before, _ := store.record("xform/demo.json")
+	// Each segment is valid, but the Artifact prefix pushes the S3 key over 1,024 bytes.
 	name := strings.Repeat("x", 255) + "/" + strings.Repeat("y", 255) + "/" + strings.Repeat("z", 255) + "/" + strings.Repeat("w", 255)
-	response := bundleRequest(t, handler, map[string]string{"index.html": "changed", name: "bad"})
-	if response.Code != 400 || !strings.Contains(response.Body.String(), `"code":"path_invalid"`) {
+	response := bundleRequest(t, handler, map[string]string{"index.html": "new", name: "bad"})
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"path_invalid"`) {
 		t.Errorf("oversized key: %d %s", response.Code, response.Body)
 	}
 	content, _, _ := store.object("xform/demo/index.html")
-	if string(content) != "parent" {
-		t.Errorf("parent changed: %q", content)
+	if string(content) != "old" {
+		t.Errorf("live entry changed: %q", content)
+	}
+	if after, _ := store.record("xform/demo.json"); after != before {
+		t.Errorf("invalid key changed record: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -234,6 +230,7 @@ func TestBundleRequestLimitsAndMalformedBodyLeaveLiveArtifactUntouched(t *testin
 	if r := bundleRequest(t, handler, map[string]string{"index.html": "old"}); r.Code != 201 {
 		t.Fatal(r.Body)
 	}
+	before, _ := store.record("xform/demo.json")
 
 	oversized := httptest.NewRequest(http.MethodPut, "/api/artifacts/xform/demo/", strings.NewReader("x"))
 	oversized.Header.Set("Content-Type", "multipart/form-data; boundary=unused")
@@ -253,17 +250,16 @@ func TestBundleRequestLimitsAndMalformedBodyLeaveLiveArtifactUntouched(t *testin
 	if !ok || string(content) != "old" {
 		t.Errorf("live entry changed after rejected requests: %q", content)
 	}
-	entries, err := os.ReadDir(spool)
-	if err != nil || len(entries) != 0 {
-		t.Errorf("spool entries = %v, err = %v", entries, err)
+	if after, _ := store.record("xform/demo.json"); after != before {
+		t.Errorf("rejected requests changed record: before=%+v after=%+v", before, after)
 	}
 }
 
 func TestBundleSpoolIsEmptyAfterSuccessAndFailure(t *testing.T) {
 	spool := t.TempDir()
 	handler := newArtifactHandlerWithSpool(t, newMemoryArtifactStore(), http.StatusOK, spool)
-	for _, files := range []map[string]string{{"index.html": "ok", "a.txt": "a"}, {"index.html": "bad", ".secret": "x"}} {
-		_ = bundleRequest(t, handler, files)
+	checkEmpty := func() {
+		t.Helper()
 		entries, err := os.ReadDir(spool)
 		if err != nil {
 			t.Fatal(err)
@@ -272,6 +268,31 @@ func TestBundleSpoolIsEmptyAfterSuccessAndFailure(t *testing.T) {
 			t.Errorf("spool has %d entries after request", len(entries))
 		}
 	}
+	if response := bundleRequest(t, handler, map[string]string{"index.html": "ok", "a.txt": "a"}); response.Code != http.StatusCreated {
+		t.Fatalf("publish = %d %s", response.Code, response.Body)
+	}
+	checkEmpty()
+
+	// Order the parts so validation fails only after a file has been spooled.
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for _, name := range []string{"index.html", ".secret"} {
+		part, err := writer.CreateFormFile(name, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(part, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := artifactRequest(t, handler, http.MethodPut, "/api/artifacts/xform/demo/", body.Bytes(), writer.FormDataContentType())
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"path_invalid"`) {
+		t.Fatalf("invalid Bundle = %d %s", response.Code, response.Body)
+	}
+	checkEmpty()
 }
 
 func TestInvalidBundleNeverTouchesLiveArtifact(t *testing.T) {
@@ -280,18 +301,21 @@ func TestInvalidBundleNeverTouchesLiveArtifact(t *testing.T) {
 	if r := bundleRequest(t, handler, map[string]string{"index.html": "old"}); r.Code != 201 {
 		t.Fatal(r.Body)
 	}
-	for _, key := range []string{".hidden", "a/.hidden", "a//b", "a/../b", "bad\\name", strings.Repeat("x", 256)} {
-		r := bundleRequest(t, handler, map[string]string{"index.html": "new", key: "bad"})
-		if r.Code != 400 || !strings.Contains(r.Body.String(), `"code":"path_invalid"`) {
-			t.Errorf("%q: %d %s", key, r.Code, r.Body)
-		}
+	before, _ := store.record("xform/demo.json")
+	// The validator's other malformed-path cases are covered in TestBundlePathValidationAndContentTypes.
+	r := bundleRequest(t, handler, map[string]string{"index.html": "new", "a/.hidden": "bad"})
+	if r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), `"code":"path_invalid"`) {
+		t.Errorf("dot-file: %d %s", r.Code, r.Body)
 	}
-	r := bundleRequest(t, handler, map[string]string{"other.txt": "no entry"})
+	r = bundleRequest(t, handler, map[string]string{"other.txt": "no entry"})
 	if r.Code != 422 || !strings.Contains(r.Body.String(), `"code":"index_missing"`) {
 		t.Errorf("missing index: %d %s", r.Code, r.Body)
 	}
 	content, _, _ := store.object("xform/demo/index.html")
 	if string(content) != "old" {
 		t.Errorf("live entry changed: %q", content)
+	}
+	if after, _ := store.record("xform/demo.json"); after != before {
+		t.Errorf("invalid Bundle changed record: before=%+v after=%+v", before, after)
 	}
 }

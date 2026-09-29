@@ -33,9 +33,6 @@ func describedPublish(t *testing.T, h http.Handler, path string, description *st
 		t.Fatal(err)
 	}
 	response := artifactRequest(t, h, http.MethodPut, "/api/artifacts/"+path, body.Bytes(), writer.FormDataContentType())
-	if response.Code == http.StatusCreated || response.Code == http.StatusOK {
-		return response.Code
-	}
 	return response.Code
 }
 
@@ -104,13 +101,12 @@ func TestLoadProjectRecord(t *testing.T) {
 func TestProjectDescriptions(t *testing.T) {
 	store := newMemoryArtifactStore()
 	h := newArtifactHandler(t, store)
-	patch := func(path, payload string) *string {
+	patch := func(path, payload string) {
 		r := artifactRequest(t, h, http.MethodPatch, "/api/projects/"+path, []byte(payload), "application/json")
 		s := r.Body.String()
 		if r.Code != 200 {
 			t.Errorf("PATCH %s: %d %s", path, r.Code, s)
 		}
-		return &s
 	}
 	patch("xform", `{"description":"A private project"}`)
 	if string(store.records["xform.json"]) != `{"description":"A private project"}` {
