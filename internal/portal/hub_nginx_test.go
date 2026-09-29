@@ -93,6 +93,7 @@ func TestHubNginxNeverForwardsForgedIdentity(t *testing.T) {
 		{"/ui/api/whoami", "", `"code":"unauthenticated"`, 401},
 		{"/", "session=valid", "owner@example.test|owner|hub.bdgn.me", 200},
 		{"/", "", "/oauth2/sign_in", 302},
+		{"/robots.txt", "", "404", 404},
 	} {
 		req, _ := http.NewRequest("GET", base+tc.path, nil)
 		req.Host = "hub.bdgn.me"
