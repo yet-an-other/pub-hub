@@ -179,6 +179,21 @@ func TestSingleFilePublishAgainstS3CompatibleServer(t *testing.T) {
 	if reloaded.Code != http.StatusOK || decodeArtifact(t, reloaded) != metadata {
 		t.Errorf("metadata after startup reload = %d %s, want %+v", reloaded.Code, reloaded.Body, metadata)
 	}
+	for _, path := range []string{"xform/notes/plan.html", "xform/demo/"} {
+		deleted := artifactRequest(t, handler, http.MethodDelete, "/api/artifacts/"+path, nil, "")
+		if deleted.Code != http.StatusNoContent {
+			t.Fatalf("delete %s = %d %s", path, deleted.Code, deleted.Body)
+		}
+	}
+	for _, bucket := range []string{artifactBucket, metadataBucket} {
+		objects, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
+		if err != nil {
+			t.Fatalf("list bucket %s after deletes: %v", bucket, err)
+		}
+		if len(objects.Contents) != 0 {
+			t.Errorf("bucket %s after deletes: objects=%v", bucket, objects.Contents)
+		}
+	}
 }
 
 func waitForS3(ctx context.Context, endpoint string) error {

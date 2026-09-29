@@ -34,6 +34,8 @@ type artifactStore interface {
 	PutRecord(context.Context, string, []byte) error
 	PutArtifact(context.Context, string, io.Reader, int64, string) error
 	DeleteLeftovers(context.Context, string, map[string]struct{}) error
+	DeleteArtifact(context.Context, string) error
+	DeleteRecord(context.Context, string) error
 	CheckBuckets(context.Context) (artifactsErr, metadataErr error)
 }
 
@@ -271,7 +273,7 @@ func (a *application) apiRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(path, "/artifacts/") {
-		if r.Method != http.MethodGet && r.Method != http.MethodPut {
+		if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodDelete {
 			auth.WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 			return
 		}
@@ -317,6 +319,10 @@ func (a *application) artifact(w http.ResponseWriter, r *http.Request, path stri
 		a.getArtifact(w, r, parsed)
 		return
 	}
+	if r.Method == http.MethodDelete {
+		a.deleteArtifact(w, r, parsed)
+		return
+	}
 	a.publishArtifact(w, r, parsed)
 }
 
@@ -333,6 +339,68 @@ func (a *application) getArtifact(w http.ResponseWriter, r *http.Request, path n
 		return
 	}
 	writeJSON(w, http.StatusOK, a.view(record))
+}
+
+func (a *application) deleteArtifact(w http.ResponseWriter, r *http.Request, path naming.ArtifactPath) {
+	publisher, ok := auth.PublisherFromContext(r.Context())
+	if !ok {
+		auth.WriteError(w, http.StatusInternalServerError, "internal_error", "publisher identity unavailable")
+		return
+	}
+	if err := a.ensureLoaded(r.Context()); err != nil {
+		a.storageUnavailable(w, "load metadata records", err)
+		return
+	}
+	stem := path.Stem()
+	if !a.claim(stem) {
+		a.log.Warn("artifact mutation busy", "path", path.PublicPath(), "publisher", publisher.Label)
+		w.Header().Set("Retry-After", "5")
+		auth.WriteError(w, http.StatusConflict, "busy", "Artifact mutation already in progress")
+		return
+	}
+	defer a.release(stem)
+
+	a.mu.RLock()
+	record, exists := a.records[stem]
+	a.mu.RUnlock()
+	if !exists || record.Path != path.PublicPath() {
+		auth.WriteError(w, http.StatusNotFound, "not_found", "Artifact not found")
+		return
+	}
+	started := time.Now()
+	record.State = "incomplete"
+	if err := a.putRecord(r.Context(), stem, record, false); err != nil {
+		a.storageUnavailable(w, "write incomplete record", err)
+		return
+	}
+	entry := path.PublicPath()
+	if path.Kind == naming.Bundle {
+		entry += "index.html"
+	}
+	if err := a.store.DeleteArtifact(r.Context(), entry); err != nil {
+		a.storageUnavailable(w, "delete Artifact entry", err)
+		return
+	}
+	if path.Kind == naming.Bundle {
+		if err := a.store.DeleteLeftovers(r.Context(), path.PublicPath(), nil); err != nil {
+			a.storageUnavailable(w, "delete Bundle files", err)
+			return
+		}
+	}
+	a.recordWriteMu.Lock()
+	err := a.store.DeleteRecord(r.Context(), stem+".json")
+	if err == nil {
+		a.mu.Lock()
+		delete(a.records, stem)
+		a.mu.Unlock()
+	}
+	a.recordWriteMu.Unlock()
+	if err != nil {
+		a.storageUnavailable(w, "delete Artifact record", err)
+		return
+	}
+	a.log.Info("artifact deleted", "path", record.Path, "publisher", publisher.Label, "file_count", record.FileCount, "bytes", record.TotalSize, "duration_ms", time.Since(started).Milliseconds())
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, path naming.ArtifactPath) {

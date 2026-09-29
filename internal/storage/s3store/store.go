@@ -87,6 +87,23 @@ func (s *Store) PutArtifact(ctx context.Context, key string, body io.Reader, siz
 	return err
 }
 
+// DeleteArtifact removes the Reader entry before any other Bundle objects.
+// S3 treats a missing key as a successful deletion.
+func (s *Store) DeleteArtifact(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.artifactBucket), Key: aws.String(key),
+	})
+	return err
+}
+
+// DeleteRecord removes an Artifact's metadata after all its objects are gone.
+func (s *Store) DeleteRecord(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.metadataBucket), Key: aws.String(key),
+	})
+	return err
+}
+
 // DeleteLeftovers removes keys under prefix not present in keep. Listing is
 // paginated and each delete is limited to S3's 1,000-key maximum.
 func (s *Store) DeleteLeftovers(ctx context.Context, prefix string, keep map[string]struct{}) error {

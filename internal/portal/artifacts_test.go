@@ -29,6 +29,11 @@ type memoryArtifactStore struct {
 	loadRecordsError      error
 	incompleteBeforeWrite bool
 	objectWriteError      error
+	deleteError           error
+	leftoversError        error
+	deleteSteps           []string
+	blockDeletes          chan struct{}
+	deleteStarted         chan struct{}
 	artifactBucketError   error
 	metadataBucketError   error
 	slowBucketChecks      bool
@@ -104,6 +109,10 @@ func (s *memoryArtifactStore) PutArtifact(_ context.Context, key string, body io
 func (s *memoryArtifactStore) DeleteLeftovers(_ context.Context, prefix string, keep map[string]struct{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.deleteSteps = append(s.deleteSteps, "leftovers:"+prefix)
+	if s.leftoversError != nil {
+		return s.leftoversError
+	}
 	for key := range s.objects {
 		if strings.HasPrefix(key, prefix) {
 			if _, ok := keep[key]; !ok {
@@ -112,6 +121,41 @@ func (s *memoryArtifactStore) DeleteLeftovers(_ context.Context, prefix string, 
 			}
 		}
 	}
+	return nil
+}
+
+func (s *memoryArtifactStore) DeleteArtifact(_ context.Context, key string) error {
+	s.mu.Lock()
+	var record artifactRecord
+	stem := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(key, "index.html"), ".html"), "/")
+	_ = json.Unmarshal(s.records[stem+".json"], &record)
+	s.deleteSteps = append(s.deleteSteps, "entry:"+key+":"+record.State)
+	started, release, err := s.deleteStarted, s.blockDeletes, s.deleteError
+	s.mu.Unlock()
+	if started != nil {
+		started <- struct{}{}
+	}
+	if release != nil {
+		<-release
+	}
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	delete(s.objects, key)
+	delete(s.contentTypes, key)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *memoryArtifactStore) DeleteRecord(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deleteError != nil {
+		return s.deleteError
+	}
+	s.deleteSteps = append(s.deleteSteps, "record:"+key)
+	delete(s.records, key)
 	return nil
 }
 
@@ -155,6 +199,12 @@ func newArtifactHandlerWithDiscoveryStatus(t *testing.T, store *memoryArtifactSt
 
 func newArtifactHandlerWithSpool(t *testing.T, store *memoryArtifactStore, discoveryStatus int, spool string) http.Handler {
 	t.Helper()
+	app := newApplication(store, "https://pub.bdgn.me", spool, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return newHandlerForApplication(t, app, discoveryStatus)
+}
+
+func newHandlerForApplication(t *testing.T, app *application, discoveryStatus int) http.Handler {
+	t.Helper()
 	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/oauth/v2/introspect":
@@ -171,7 +221,6 @@ func newArtifactHandlerWithSpool(t *testing.T, store *memoryArtifactStore, disco
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}
-	app := newApplication(store, "https://pub.bdgn.me", spool, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := app.prepareSpool(); err != nil {
 		t.Fatalf("prepareSpool: %v", err)
 	}
