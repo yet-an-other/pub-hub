@@ -526,7 +526,7 @@ func writeUploadError(w http.ResponseWriter, err error) {
 	case errors.Is(err, errSpoolFailure):
 		auth.WriteError(w, http.StatusInternalServerError, "internal_error", "Could not spool the upload")
 	default:
-		auth.WriteError(w, http.StatusBadRequest, "request_invalid", "Malformed single-file publish request")
+		auth.WriteError(w, http.StatusBadRequest, "request_invalid", "Malformed publish request")
 	}
 }
 

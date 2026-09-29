@@ -160,6 +160,72 @@ func TestBundleRejectsNestedArtifactsAndFullKeyOverflow(t *testing.T) {
 	}
 }
 
+func TestBundlePathValidationAndContentTypes(t *testing.T) {
+	for _, test := range []struct {
+		key   string
+		valid bool
+	}{
+		{"assets/Café.PNG", true},
+		{"LICENSE", true},
+		{strings.Repeat("a", 255), true},
+		{strings.Repeat("a", 256), false},
+		{"", false},
+		{"./index.html", false},
+		{"a/../index.html", false},
+		{"a//index.html", false},
+		{"a/.hidden", false},
+		{"a\\b", false},
+		{"a/\x00b", false},
+		{"a/\x7fb", false},
+		{string([]byte{0xff}), false},
+	} {
+		if got := validBundleKey(test.key); got != test.valid {
+			t.Errorf("validBundleKey(%q) = %t, want %t", test.key, got, test.valid)
+		}
+	}
+	for key, want := range map[string]string{
+		"INDEX.HTML": "text/html", "assets/Café.PNG": "image/png",
+		"app.mjs": "text/javascript", "LICENSE": "application/octet-stream",
+		"unknown.zzz": "application/octet-stream",
+	} {
+		if got := bundleContentType(key); got != want {
+			t.Errorf("bundleContentType(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestBundleRequestLimitsAndMalformedBodyLeaveLiveArtifactUntouched(t *testing.T) {
+	store := newMemoryArtifactStore()
+	spool := t.TempDir()
+	handler := newArtifactHandlerWithSpool(t, store, http.StatusOK, spool)
+	if r := bundleRequest(t, handler, map[string]string{"index.html": "old"}); r.Code != 201 {
+		t.Fatal(r.Body)
+	}
+
+	oversized := httptest.NewRequest(http.MethodPut, "/api/artifacts/xform/demo/", strings.NewReader("x"))
+	oversized.Header.Set("Content-Type", "multipart/form-data; boundary=unused")
+	oversized.Header.Set("Authorization", "Bearer test-pat")
+	oversized.ContentLength = maxPublishBytes + 1
+	oversizedResult := httptest.NewRecorder()
+	handler.ServeHTTP(oversizedResult, oversized)
+	if oversizedResult.Code != 413 || !strings.Contains(oversizedResult.Body.String(), `"code":"too_large"`) {
+		t.Errorf("oversized Bundle: %d %s", oversizedResult.Code, oversizedResult.Body)
+	}
+
+	malformed := artifactRequest(t, handler, http.MethodPut, "/api/artifacts/xform/demo/", []byte("--broken\r\nContent-Disposition: form-data; name=\"index.html\"; filename=\"index.html\"\r\n\r\nunfinished"), "multipart/form-data; boundary=broken")
+	if malformed.Code != 400 || !strings.Contains(malformed.Body.String(), `"code":"request_invalid"`) {
+		t.Errorf("malformed Bundle: %d %s", malformed.Code, malformed.Body)
+	}
+	content, _, ok := store.object("xform/demo/index.html")
+	if !ok || string(content) != "old" {
+		t.Errorf("live entry changed after rejected requests: %q", content)
+	}
+	entries, err := os.ReadDir(spool)
+	if err != nil || len(entries) != 0 {
+		t.Errorf("spool entries = %v, err = %v", entries, err)
+	}
+}
+
 func TestBundleSpoolIsEmptyAfterSuccessAndFailure(t *testing.T) {
 	spool := t.TempDir()
 	handler := newArtifactHandlerWithSpool(t, newMemoryArtifactStore(), http.StatusOK, spool)
