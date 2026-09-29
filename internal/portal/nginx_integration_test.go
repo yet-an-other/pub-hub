@@ -24,6 +24,7 @@ func testReaderNginx(t *testing.T, endpoint, bucket string) {
 	var mu sync.Mutex
 	var requests []http.Header
 	var knownETag string
+	var conditionalMatch bool
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		requests = append(requests, r.Header.Clone())
@@ -32,6 +33,9 @@ func testReaderNginx(t *testing.T, endpoint, bucket string) {
 		// The local S3 server doesn't implement conditional anonymous GETs.
 		// Simulate RGW's 304 after verifying nginx stripped W/.
 		if etag != "" && r.Header.Get("If-None-Match") == etag {
+			mu.Lock()
+			conditionalMatch = true
+			mu.Unlock()
 			w.Header().Set("ETag", etag)
 			w.WriteHeader(http.StatusNotModified)
 			return
@@ -184,6 +188,9 @@ func testReaderNginx(t *testing.T, endpoint, bucket string) {
 		}
 	}
 	if etag != "" && !sawCleanETag {
-		t.Error("RGW did not receive the strong ETag")
+		t.Errorf("RGW did not receive the strong ETag: client=%q upstream=%q, requests=%v", etag, knownETag, requests)
+	}
+	if etag != "" && !conditionalMatch {
+		t.Errorf("conditional response not triggered: client=%q upstream=%q", etag, knownETag)
 	}
 }
