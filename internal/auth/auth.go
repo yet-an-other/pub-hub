@@ -181,14 +181,32 @@ func NewAuthenticator(issuerURL, clientID, clientSecret string, allowlist map[st
 	return &Authenticator{introspector: introspector, allowlist: allowed, log: log}, nil
 }
 
-// Require authenticates a machine Publisher and adds its identity to the
-// request context before invoking next. Cookies and identity headers are not
-// consulted.
 // IDPReachable reports whether the configured Zitadel issuer is reachable.
 func (a *Authenticator) IDPReachable(ctx context.Context) bool {
 	return a.introspector.reachable(ctx)
 }
 
+// RequireOwner trusts only the identity supplied by the nginx auth_request
+// location. The Portal socket must not be exposed to untrusted peers.
+func RequireOwner(ownerEmail string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		email := r.Header.Get("X-Auth-Request-Email")
+		if email == "" {
+			WriteError(w, http.StatusUnauthorized, "unauthenticated", "browser session required")
+			return
+		}
+		if email != ownerEmail {
+			WriteError(w, http.StatusForbidden, "forbidden", "owner identity required")
+			return
+		}
+		publisher := Publisher{Subject: email, Label: email}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), publisherContextKey{}, publisher)))
+	})
+}
+
+// Require authenticates a machine Publisher and adds its identity to the
+// request context before invoking next. Cookies and identity headers are not
+// consulted.
 func (a *Authenticator) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := bearerToken(r.Header.Get("Authorization"))

@@ -224,7 +224,7 @@ func newHandlerForApplication(t *testing.T, app *application, discoveryStatus in
 	if err := app.prepareSpool(); err != nil {
 		t.Fatalf("prepareSpool: %v", err)
 	}
-	return routes(authenticator, app)
+	return routes(authenticator, app, "owner@example.test")
 }
 
 func multipartFile(t *testing.T, fileName, contents string) ([]byte, string) {
@@ -290,7 +290,7 @@ func TestSingleFilePublishReadAndReplace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := routes(authenticator, app)
+	handler := routes(authenticator, app, "owner@example.test")
 	app.now = func() time.Time {
 		baseTime = baseTime.Add(time.Second)
 		return baseTime

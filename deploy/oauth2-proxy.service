@@ -1,0 +1,22 @@
+[Unit]
+Description=Pub Hub browser sign-in (oauth2-proxy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pubhub-oauth2
+Group=nginx
+RuntimeDirectory=oauth2-proxy
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/bin/oauth2-proxy --config=/etc/oauth2-proxy/oauth2-proxy.cfg
+LoadCredential=hub-browser-client-secret:/etc/oauth2-proxy/credentials/hub-browser-client-secret
+LoadCredential=cookie-secret:/etc/oauth2-proxy/credentials/cookie-secret
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

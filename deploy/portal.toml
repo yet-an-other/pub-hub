@@ -10,6 +10,7 @@ socket = "/run/pubhub/portal.sock"
 # The application secret is loaded by systemd, never from this file.
 zitadel_issuer_url = "https://zitadel.example.com"
 hub_api_client_id = "replace-with-hub-api-client-id"
+owner_email = "owner@example.com"
 
 # RGW endpoint and bucket names. Use the loopback endpoint, not s3.bdgn.me.
 s3_endpoint = "http://127.0.0.1:7480"

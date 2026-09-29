@@ -28,6 +28,8 @@ type Config struct {
 	// Publishers maps Zitadel user IDs to the Publisher labels recorded by the
 	// Portal.
 	Publishers map[string]string `toml:"publishers"`
+	// OwnerEmail is the only browser identity admitted under /ui/api/.
+	OwnerEmail string `toml:"owner_email"`
 
 	// S3Endpoint is the RGW endpoint. Credentials arrive through
 	// systemd's LoadCredential=.
@@ -81,6 +83,9 @@ func (c Config) validate() error {
 	issuer, err := url.Parse(c.ZitadelIssuerURL)
 	if err != nil || issuer.Scheme == "" || issuer.Host == "" {
 		return fmt.Errorf("zitadel issuer URL must be an absolute URL, got %q", c.ZitadelIssuerURL)
+	}
+	if c.OwnerEmail == "" || strings.TrimSpace(c.OwnerEmail) != c.OwnerEmail || strings.ContainsAny(c.OwnerEmail, " \t\r\n") || !strings.Contains(c.OwnerEmail, "@") {
+		return errors.New("valid owner email is required")
 	}
 	if c.S3Endpoint == "" || c.ArtifactBucket == "" || c.MetadataBucket == "" || c.PublicBaseURL == "" {
 		return errors.New("s3 endpoint, artifact bucket, metadata bucket, and public base URL are required")

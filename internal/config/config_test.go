@@ -22,6 +22,7 @@ func validConfig() string {
 	return `socket = "/run/pubhub/portal.sock"
 zitadel_issuer_url = "https://zitadel.example.test"
 hub_api_client_id = "hub-api"
+owner_email = "owner@example.test"
 s3_endpoint = "http://127.0.0.1:7480"
 artifact_bucket = "pubhub-artifacts"
 metadata_bucket = "pubhub-meta"
@@ -48,6 +49,9 @@ func TestLoadReadsThePortalSettings(t *testing.T) {
 	}
 	if cfg.HubAPIClientID != "hub-api" {
 		t.Errorf("HubAPIClientID = %q", cfg.HubAPIClientID)
+	}
+	if cfg.OwnerEmail != "owner@example.test" {
+		t.Errorf("OwnerEmail = %q", cfg.OwnerEmail)
 	}
 	if got := cfg.Publishers["user-123"]; got != "owner" {
 		t.Errorf("Publishers[user-123] = %q, want owner", got)
@@ -90,6 +94,8 @@ func TestLoadRejectsInvalidAuthenticationSettings(t *testing.T) {
 		{"issuer missing", "socket = \"/run/pubhub/portal.sock\"\nhub_api_client_id = \"hub-api\"", "zitadel issuer URL"},
 		{"issuer relative", "socket = \"/run/pubhub/portal.sock\"\nzitadel_issuer_url = \"zitadel\"\nhub_api_client_id = \"hub-api\"", "absolute URL"},
 		{"client id missing", "socket = \"/run/pubhub/portal.sock\"\nzitadel_issuer_url = \"https://zitadel.example.test\"", "hub API client id"},
+		{"owner missing", strings.Replace(validConfig(), "owner_email = \"owner@example.test\"\n", "", 1), "owner email"},
+		{"owner invalid", strings.Replace(validConfig(), "owner@example.test", "owner example.test", 1), "owner email"},
 		{"empty publisher id", strings.Replace(validConfig(), "\"user-123\" = \"owner\"", "\"\" = \"owner\"", 1), "publisher user id"},
 		{"empty publisher label", strings.Replace(validConfig(), `"user-123" = "owner"`, `"user-123" = ""`, 1), "publisher label"},
 	}

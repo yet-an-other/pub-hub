@@ -12,6 +12,8 @@ What ships in `deploy/`:
 | `portal.toml` | `/etc/pubhub/portal.toml` |
 | `hub.bdgn.me.conf` | the nginx server block for `hub.bdgn.me`, wherever the host keeps them |
 | `pub.bdgn.me.conf` | the nginx HTTP-context config for `pub.bdgn.me` (maps, rate zone and server) |
+| `oauth2-proxy.cfg` | `/etc/oauth2-proxy/oauth2-proxy.cfg` |
+| `oauth2-proxy.service` | `/etc/systemd/system/oauth2-proxy.service` |
 
 Releases are GitHub Releases, cut by pushing a `v*` tag. Each carries `pubhub-portal-linux-amd64`, `pubhub-portal-linux-arm64`, CLI binaries for Linux `amd64`/`arm64` and macOS `arm64`, and `checksums.txt`.
 
@@ -35,7 +37,7 @@ Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#z
    sudo usermod -aG pubhub nginx
    ```
 
-2. **(owner, host)** Create the config directory and install the config. Set the Zitadel issuer, `hub-api` client ID, `[publishers]` entries, RGW loopback endpoint, bucket names and `pub.` base URL in `/etc/pubhub/portal.toml`. The RGW endpoint must be the loopback URL, not `s3.bdgn.me`; secrets do not belong in this file.
+2. **(owner, host)** Create the config directory and install the config. Set the Zitadel issuer, `hub-api` client ID, `owner_email`, `[publishers]` entries, RGW loopback endpoint, bucket names and `pub.` base URL in `/etc/pubhub/portal.toml`. The RGW endpoint must be the loopback URL, not `s3.bdgn.me`; secrets do not belong in this file.
 
    ```sh
    sudo install -d -m 0755 /etc/pubhub
@@ -89,6 +91,32 @@ Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#z
    ```
 
    The `whoami` request returns the configured Publisher label. From outside the LAN and VPN ranges, all three requests get `403`.
+
+## Browser sign-in
+
+**(owner)** In Zitadel, enable "Check Role Assignment on Authentication" for the `pub-hub` project. Create the `owner` role and grant it to the owner. Create the `hub-browser` web app using authorization code flow, Basic client authentication and PKCE S256, with callback `https://hub.bdgn.me/oauth2/callback`. Keep the existing `hub-api` app for PAT introspection. Use the same canonical Zitadel hostname in the app, `portal.toml`, and oauth2-proxy's `oidc_issuer_url`: Zitadel derives its issuer from the request Host. Do not use an internal alias in one place and the canonical hostname in another.
+
+**(owner, host)** Install oauth2-proxy v7.15.2 or later at `/usr/local/bin/oauth2-proxy`. Set the unit's `Group=` to the host's nginx group (`nginx`, `www-data` or `http`). The unit runs as `pubhub-oauth2`; its socket is `0660` in a `0750` runtime directory owned by that user and the nginx group. nginx alone should reach this socket. Set the canonical issuer and `hub-browser` client ID in the example config. Put only the owner's exact email in `owner-emails`, one line. Match it to `owner_email` in `portal.toml`.
+
+```sh
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin pubhub-oauth2
+sudo install -d -o root -g root -m 0755 /etc/oauth2-proxy
+sudo install -d -o root -g root -m 0700 /etc/oauth2-proxy/credentials
+sudo install -m 0644 deploy/oauth2-proxy.cfg /etc/oauth2-proxy/oauth2-proxy.cfg
+printf '%s\n' 'owner@example.com' | sudo tee /etc/oauth2-proxy/owner-emails >/dev/null
+sudo chmod 0644 /etc/oauth2-proxy/owner-emails
+sudo install -o root -g root -m 0600 /path/to/hub-browser-client-secret /etc/oauth2-proxy/credentials/hub-browser-client-secret
+# Exactly 32 raw bytes, no newline. Retain this secret for restarts.
+sudo sh -c 'umask 077; dd if=/dev/urandom of=/etc/oauth2-proxy/credentials/cookie-secret bs=32 count=1'
+sudoedit /etc/oauth2-proxy/oauth2-proxy.cfg
+sudo install -m 0644 deploy/oauth2-proxy.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now oauth2-proxy
+```
+
+Set the TLS certificate paths and LAN/VPN ranges in `hub.bdgn.me.conf`, then `sudo nginx -t && sudo systemctl reload nginx`. Do not expose `hub.` through the tunnel. `/oauth2/auth` must remain `internal`; `/api/` must not use `auth_request`. The CI check runs this nginx block with a stub auth endpoint and forged identity headers on the Portal locations.
+
+From an owner browser on the LAN, open `https://hub.bdgn.me/`. After sign-in it shows the Catalogue placeholder until the UI ships. Check `/ui/api/whoami` returns `{"label":"owner@example.com"}`. An expired session gets JSON `401` there; `/` redirects to `/oauth2/sign_in`. `/oauth2/sign_out` clears the oauth2-proxy cookie. Because `session_cookie_minimal` discards the ID token, this does not end the Zitadel session. For full sign-out, visit `https://<canonical-zitadel-host>/oidc/v1/end_session?client_id=<hub-browser-client-id>` in the browser after `/oauth2/sign_out`. Use the `hub-browser` client ID, not its secret. If you configure a `post_logout_redirect_uri`, register the exact URI in Zitadel first. Confirm a fresh visit to `hub.` asks for sign-in rather than silently reusing the IdP session.
 
 ## Reader host on the LAN
 
