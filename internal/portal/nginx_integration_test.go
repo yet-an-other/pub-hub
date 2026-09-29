@@ -153,7 +153,8 @@ func testReaderNginx(t *testing.T, endpoint, bucket string) {
 	if etag == "" {
 		t.Error("missing S3 ETag")
 	} else {
-		test("GET", "/xform/notes/plan.html", map[string]string{"If-None-Match": "W/" + etag}, 304, "")
+		// nginx gzip may already have weakened the ETag on the first response.
+		test("GET", "/xform/notes/plan.html", map[string]string{"If-None-Match": "W/" + strings.TrimPrefix(etag, "W/")}, 304, "")
 	}
 	test("HEAD", "/xform/demo/", nil, 200, "text/html")
 	test("GET", "/xform/demo/", nil, 200, "text/html")
@@ -183,7 +184,7 @@ func testReaderNginx(t *testing.T, endpoint, bucket string) {
 				t.Errorf("RGW received %s", name)
 			}
 		}
-		if etag != "" && h.Get("If-None-Match") == etag {
+		if etag != "" && h.Get("If-None-Match") == strings.TrimPrefix(etag, "W/") {
 			sawCleanETag = true
 		}
 	}
