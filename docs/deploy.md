@@ -11,14 +11,15 @@ What ships in `deploy/`:
 | `pubhub-portal.service` | `/etc/systemd/system/pubhub-portal.service` |
 | `portal.toml` | `/etc/pubhub/portal.toml` |
 | `hub.bdgn.me.conf` | the nginx server block for `hub.bdgn.me`, wherever the host keeps them |
+| `pub.bdgn.me.conf` | the nginx HTTP-context config for `pub.bdgn.me` (maps, rate zone and server) |
 
 Releases are GitHub Releases, cut by pushing a `v*` tag. Each carries `pubhub-portal-linux-amd64`, `pubhub-portal-linux-arm64`, CLI binaries for Linux `amd64`/`arm64` and macOS `arm64`, and `checksums.txt`.
 
 ## Cut a release
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.7.0
+git push origin v0.7.0
 ```
 
 The Release workflow runs vet and tests, then publishes the binaries and checksums.
@@ -88,6 +89,27 @@ Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#z
    ```
 
    The `whoami` request returns the configured Publisher label. From outside the LAN and VPN ranges, all three requests get `403`.
+
+## Reader host on the LAN
+
+**(owner, host)** After granting anonymous `GetObject` on the Artifact bucket, install `deploy/pub.bdgn.me.conf` in nginx's `http` context alongside the `hub.` config. It defines `map` and `limit_req_zone` directives outside the server block, so do not paste it inside a `server`. Set the existing wildcard TLS certificate and key paths in the file. Keep RGW at `127.0.0.1:7480` and the bucket name `pubhub-artifacts`, or change both in the file to match `portal.toml`. This server must not be exposed to the internet yet.
+
+```sh
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Add an **internal** DNS record for `pub.bdgn.me` pointing at this nginx host. From the LAN, publish a Bundle with the CLI and check the entry, its explicit index, the redirect and a missing key:
+
+```sh
+pubhub publish ./demo xform/demo --no-overwrite
+curl -si https://pub.bdgn.me/xform/demo/
+curl -si https://pub.bdgn.me/xform/demo/index.html
+curl -si https://pub.bdgn.me/xform/demo    # 301, Location: /xform/demo/
+curl -si https://pub.bdgn.me/xform/missing.html  # 404
+curl -si https://pub.bdgn.me/robots.txt  # 404, noindex
+```
+
+Check `Content-Type`, `Cache-Control: no-cache, no-transform`, `X-Robots-Tag: noindex, nofollow` and `X-Content-Type-Options: nosniff` on both successful and error responses. nginx's access log records Reader IPs. Point the LAN uptime monitor at `https://hub.bdgn.me/readyz` and one known Artifact URL at `pub.`; checking the known URL also tests RGW serving, not just the Portal. The CI test runs the shipped config against local S3 and Artifacts published through the Portal. If RGW introduces new `x-amz-*` or `x-rgw-*` response headers, add their names to the nginx `proxy_hide_header` list and the integration check.
 
 ## RGW users, buckets and policies
 
@@ -203,7 +225,7 @@ The Portal sends `Authorization: Bearer <PAT>` to `/api/` and introspects the PA
 **(owner, host)** Pick the version and the host's architecture (`amd64` or `arm64`), then download and verify:
 
 ```sh
-VERSION=v0.1.0
+VERSION=v0.7.0
 ARCH=amd64
 BASE=https://github.com/yet-an-other/pub-hub/releases/download/$VERSION
 curl -fLO "$BASE/pubhub-portal-linux-$ARCH"

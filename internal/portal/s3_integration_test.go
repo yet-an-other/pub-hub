@@ -144,10 +144,11 @@ func TestSingleFilePublishAgainstS3CompatibleServer(t *testing.T) {
 
 	// Bundle replacement must paginate the listing and batch deletion of more
 	// than one ListObjectsV2 page of leftovers.
-	bundle := bundleRequest(t, handler, map[string]string{"index.html": "<title>Bundle</title>", "old.css": "body{}"})
+	bundle := bundleRequest(t, handler, map[string]string{"index.html": "<title>Bundle</title>", "old.css": "body{}", "asset name.txt": "hello"})
 	if bundle.Code != http.StatusCreated {
 		t.Fatalf("publish Bundle = %d %s", bundle.Code, bundle.Body)
 	}
+	testReaderNginx(t, endpoint, artifactBucket)
 	bulkCtx, cancelBulk := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancelBulk()
 	for i := 0; i < 1001; i++ {

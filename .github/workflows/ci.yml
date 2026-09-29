@@ -20,6 +20,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
+      - name: Install nginx for Reader integration checks
+        run: sudo apt-get update && sudo apt-get install -y nginx
       - name: Start local S3-compatible server
         # MinIO RELEASE.2025-04-22T22-12-26Z, rebuilt from source by coollabsio.
         # Docker Hub no longer serves minio/minio; pin the mirror by digest.
