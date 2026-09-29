@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { groups, type Artifact, type Project } from './catalogue'
+import { PublishForm, type Dropped } from './PublishForm'
+import { droppedFiles } from './publish'
 import './style.css'
 
 type ApiFailure = { code: string; message: string; status: number }
@@ -64,7 +66,7 @@ function ProjectHeader({ project, changed }: { project: Project; changed: (proje
   </div>
 }
 
-function Row({ artifact, base, changed, deleted }: { artifact: Artifact; base: string; changed: (artifact: Artifact) => void; deleted: (path: string) => void }) {
+function Row({ artifact, base, changed, deleted, publish, form }: { artifact: Artifact; base: string; changed: (artifact: Artifact) => void; deleted: (path: string) => void; publish: () => void; form: React.ReactNode }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(artifact.description)
@@ -117,10 +119,12 @@ function Row({ artifact, base, changed, deleted }: { artifact: Artifact; base: s
         </form> : <button className="edit-description description" type="button" onClick={() => { setDraft(artifact.description); setEditing(true); setConfirming(false); setFailure(null) }} aria-label={`Edit description for ${artifact.path}`}>{artifact.description || 'Add a description'} <span aria-hidden="true">✎</span></button>}
         <p className="meta">Updated {date(artifact.updated_at)} by {artifact.last_publisher}<br />Created {date(artifact.created_at)} · {artifact.file_count} {artifact.file_count === 1 ? 'file' : 'files'} · {size(artifact.total_size)}</p>
         {artifact.state === 'incomplete' && <p className="warning">The last publish or delete didn't finish. Readers may see mixed files or 404s. Publish again or delete to finish.</p>}
+        <button type="button" onClick={publish}>Publish new version</button>
         {confirming ? <div className="delete-confirm"><p>Readers get 404 at once; there is no undo</p><button className="danger" type="button" disabled={pending} onClick={() => void remove()}>Confirm delete</button><button type="button" disabled={pending} onClick={() => { setConfirming(false); setFailure(null) }}>Cancel</button></div> : <button className="danger" type="button" disabled={pending} onClick={() => { setConfirming(true); setEditing(false); setFailure(null) }}>Delete Artifact</button>}
         <MutationError failure={failure} retry={() => void (confirming ? remove() : save())} />
       </div>
     </div>}
+    {form}
   </div>
 }
 
@@ -134,6 +138,8 @@ function App() {
   const [refreshError, setRefreshError] = useState('')
   const [query, setQuery] = useState('')
   const [incomplete, setIncomplete] = useState(false)
+  const [publishing, setPublishing] = useState<{ slot: string; initial: string; fixed: boolean; selection?: Dropped; id: number } | null>(null)
+  const [dragged, setDragged] = useState('')
   const search = useRef<HTMLInputElement>(null)
   async function refreshCatalogue() {
     const [a, p] = await Promise.all([api<Artifact[]>('artifacts'), api<Project[]>('projects')])
@@ -143,6 +149,22 @@ function App() {
   function artifactChanged(updated: Artifact) {
     setArtifacts(existing => existing.map(item => item.path === updated.path ? updated : item))
     refreshAfterMutation()
+  }
+  function published(artifact: Artifact) {
+    setPublishing(null)
+    setArtifacts(existing => [...existing.filter(a => a.path !== artifact.path), artifact])
+    refreshAfterMutation()
+  }
+  function openPublish(slot: string, initial: string, fixed = false, selection?: Dropped) {
+    setPublishing({ slot, initial, fixed, selection, id: Date.now() + Math.random() })
+  }
+  async function drop(e: React.DragEvent, slot: string, prefix: string) {
+    e.preventDefault(); setDragged('')
+    try { openPublish(slot, prefix, false, await droppedFiles(e.dataTransfer)) }
+    catch (error) { setRefreshError(error instanceof Error ? error.message : String(error)) }
+  }
+  function form(slot: string) {
+    return publishing?.slot === slot && <PublishForm key={publishing.id} initial={publishing.initial} fixed={publishing.fixed} selection={publishing.selection} existing={artifacts} base={base} done={published} close={() => setPublishing(null)} />
   }
   function artifactDeleted(path: string) {
     setArtifacts(existing => existing.filter(item => item.path !== path))
@@ -163,14 +185,15 @@ function App() {
   const incompleteCount = artifacts.filter(a => a.state === 'incomplete').length
   const visible = groups(projects, artifacts, query, incomplete)
   return <><header className="top"><div className="top-inner"><span className="mark">p</span><b>pub-hub</b><span className="muted">♙ Private Catalogue</span><span className="spacer" /><span className="muted">{size(artifacts.reduce((sum, a) => sum + a.total_size, 0))} in {artifacts.length} Artifacts</span><span className="divider" /><span className="email">{email}</span><a href="/oauth2/sign_out">Sign out</a></div></header>
-    <main><div className="hero"><div><span className="eyebrow">Catalogue</span><h1>Published Artifacts <span className="count">{artifacts.length}</span></h1><p className="muted">Public at {base ? new URL(base).host : 'pub.'}, never indexed or listed.</p></div><span className="muted private">♙ Descriptions are private</span></div>
+    <main><div className="hero"><div><span className="eyebrow">Catalogue</span><h1>Published Artifacts <span className="count">{artifacts.length}</span></h1><p className="muted">Public at {base ? new URL(base).host : 'pub.'}, never indexed or listed.</p></div><span className="muted private">♙ Descriptions are private</span><button type="button" className="publish-button" onClick={() => openPublish('top', '')}>Publish</button></div>
       {refreshError && <p role="alert" className="mutation-error">Could not refresh Catalogue: {refreshError} <button type="button" onClick={() => refreshAfterMutation()}>Retry</button></p>}
       {incompleteCount > 0 && <div className="notice">{incompleteCount} {incompleteCount === 1 ? 'Artifact' : 'Artifacts'} didn't finish publishing or deleting. Publish again or delete to finish.<button onClick={() => setIncomplete(true)}>Show →</button></div>}
       <div className="toolbar"><label className="search"><span>⌕</span><input ref={search} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search Projects, paths, titles, descriptions…" aria-label="Search Catalogue" /><kbd>/</kbd></label><button aria-pressed={!incomplete} onClick={() => setIncomplete(false)}>All <small>{artifacts.length}</small></button><button aria-pressed={incomplete} onClick={() => setIncomplete(true)}>Incomplete <small>{incompleteCount}</small></button><span className="spacer" /><span className="muted">{visible.length} Projects</span></div>
-      {loading ? <p role="status">Loading Catalogue…</p> : error ? <p role="alert">{error}</p> : visible.length === 0 ? <p className="empty">No matching Artifacts or Projects.</p> : visible.map(g => <section className="project" key={g.project.name}><ProjectHeader project={g.project} changed={updated => { setProjects(existing => existing.map(p => p.name === updated.name ? updated : p)); refreshAfterMutation() }} />
+      {form('top')}
+      {loading ? <p role="status">Loading Catalogue…</p> : error ? <p role="alert">{error}</p> : visible.length === 0 ? <p className="empty">No matching Artifacts or Projects.</p> : visible.map(g => <section className="project" key={g.project.name}><div className={dragged === g.project.name ? 'drop-target active' : 'drop-target'} onDragOver={e => { e.preventDefault(); setDragged(g.project.name) }} onDragLeave={() => setDragged('')} onDrop={e => void drop(e, g.project.name, g.project.name + '/')}><ProjectHeader project={g.project} changed={updated => { setProjects(existing => existing.map(p => p.name === updated.name ? updated : p)); refreshAfterMutation() }} /></div>{form(g.project.name)}
         {!g.artifacts.length && !g.categories.length && <p className="empty">No Artifacts yet</p>}
-        {g.artifacts.map(a => <Row artifact={a} base={base} key={a.path} changed={artifactChanged} deleted={artifactDeleted} />)}
-        {g.categories.map(c => <div key={c.name}><h3 className="category">{c.name}</h3>{c.artifacts.map(a => <Row artifact={a} base={base} key={a.path} changed={artifactChanged} deleted={artifactDeleted} />)}</div>)}
+        {g.artifacts.map(a => <Row artifact={a} base={base} key={a.path} changed={artifactChanged} deleted={artifactDeleted} publish={() => openPublish(a.path, a.path, true)} form={form(a.path)} />)}
+        {g.categories.map(c => <div key={c.name}><h3 className={dragged === g.project.name + '/' + c.name ? 'category drop-target active' : 'category drop-target'} onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragged(g.project.name + '/' + c.name) }} onDragLeave={e => { e.stopPropagation(); setDragged('') }} onDrop={e => { e.stopPropagation(); void drop(e, g.project.name + '/' + c.name, g.project.name + '/' + c.name + '/') }}>{c.name}</h3>{form(g.project.name + '/' + c.name)}{c.artifacts.map(a => <Row artifact={a} base={base} key={a.path} changed={artifactChanged} deleted={artifactDeleted} publish={() => openPublish(a.path, a.path, true)} form={form(a.path)} />)}</div>)}
       </section>)}
     </main></>
 }
