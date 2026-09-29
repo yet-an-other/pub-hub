@@ -23,10 +23,19 @@ func testReaderNginx(t *testing.T, endpoint, bucket string) {
 	}
 	var mu sync.Mutex
 	var requests []http.Header
+	var knownETag string
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		requests = append(requests, r.Header.Clone())
+		etag := knownETag
 		mu.Unlock()
+		// The local S3 server doesn't implement conditional anonymous GETs.
+		// Simulate RGW's 304 after verifying nginx stripped W/.
+		if etag != "" && r.Header.Get("If-None-Match") == etag {
+			w.Header().Set("ETag", etag)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, endpoint+r.URL.RequestURI(), nil)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -40,6 +49,11 @@ func testReaderNginx(t *testing.T, endpoint, bucket string) {
 			return
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK && resp.Header.Get("ETag") != "" {
+			mu.Lock()
+			knownETag = resp.Header.Get("ETag")
+			mu.Unlock()
+		}
 		for k, values := range resp.Header {
 			for _, v := range values {
 				w.Header().Add(k, v)
