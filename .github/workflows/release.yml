@@ -17,6 +17,7 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -race ./...
+      - run: sh scripts/test-install-pubhub.sh
       - name: Build
         run: |
           mkdir dist
@@ -28,6 +29,9 @@ jobs:
               go build -trimpath -ldflags="-s -w" \
               -o "dist/pubhub-linux-$arch" ./cmd/pubhub
           done
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
+            go build -trimpath -ldflags="-s -w" \
+            -o dist/pubhub-darwin-arm64 ./cmd/pubhub
           cd dist && sha256sum pubhub-* > checksums.txt
       - name: Publish release
         env:

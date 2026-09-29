@@ -12,7 +12,7 @@ What ships in `deploy/`:
 | `portal.toml` | `/etc/pubhub/portal.toml` |
 | `hub.bdgn.me.conf` | the nginx server block for `hub.bdgn.me`, wherever the host keeps them |
 
-Releases are GitHub Releases, cut by pushing a `v*` tag. Each carries `pubhub-portal-linux-amd64`, `pubhub-portal-linux-arm64` and `checksums.txt`.
+Releases are GitHub Releases, cut by pushing a `v*` tag. Each carries `pubhub-portal-linux-amd64`, `pubhub-portal-linux-arm64`, CLI binaries for Linux `amd64`/`arm64` and macOS `arm64`, and `checksums.txt`.
 
 ## Cut a release
 
@@ -227,6 +227,19 @@ If the release notes change `portal.toml`, the unit or the nginx server block, i
 ```sh
 journalctl -u pubhub-portal -n 20
 ```
+
+## Install or upgrade the CLI
+
+Run `scripts/install-pubhub.sh` from a checkout as the user who will publish, without `sudo`. It detects Linux `x86_64`/`aarch64` or M-series macOS, downloads the CLI for the latest non-prerelease GitHub release, verifies its SHA-256 against the release's `checksums.txt`, and installs it at `~/.local/bin/pubhub`. It skips replacing an identical binary. `curl`, `awk`, `grep`, `install`, and either `sha256sum` or `shasum` are required. Ensure `~/.local/bin` is on your `PATH`.
+
+```sh
+sh scripts/install-pubhub.sh          # latest release
+sh scripts/install-pubhub.sh v0.6.0   # pin or roll back to an available release
+```
+
+On first install, when there is no `$XDG_CONFIG_HOME/pubhub/config.toml` (or `~/.config/pubhub/config.toml`), the script runs `pubhub login`. Enter the PAT from the owner's Zitadel service account; the CLI validates it through the Portal and saves it in a private `0600` config file. The account must be on the Portal's `[publishers]` allowlist. Run the installer with an interactive terminal for a hidden PAT prompt. If login fails, the verified CLI stays installed so you can retry with `~/.local/bin/pubhub login`.
+
+Subsequent runs leave credentials unchanged, even if the PAT has expired. Renew one with `pubhub login`. `PUBHUB_URL` sets the Portal URL during login; the default is `https://hub.bdgn.me`. A pinned release must include a CLI binary for your platform: `v0.5.0` has only Linux builds, so macOS needs a later release. This script installs the CLI only; upgrading the Portal still follows [Upgrade](#upgrade).
 
 ## Rollback
 

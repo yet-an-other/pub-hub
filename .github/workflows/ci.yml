@@ -30,3 +30,4 @@ jobs:
             --env MINIO_SITE_REGION=default \
             ghcr.io/coollabsio/minio@sha256:a4938f37f1be1841b8e7b627ad0207b265345fd0d063e42d7410c78af0e63e68 server /data
       - run: go test -race ./...
+      - run: sh scripts/test-install-pubhub.sh
