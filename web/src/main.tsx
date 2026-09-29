@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { groups, type Artifact, type Project } from './catalogue'
+import { groups, size, type Artifact, type Project } from './catalogue'
 import { PublishForm, type Dropped } from './PublishForm'
 import { droppedFiles } from './publish'
 import './style.css'
@@ -34,7 +34,6 @@ function MutationError({ failure, retry }: { failure: ApiFailure | null; retry: 
   return <p className="mutation-error" role="alert">{failure.code}: {failure.message}{(failure.code === 'busy' || failure.status === 503) && <> <button type="button" onClick={retry}>Retry</button></>}</p>
 }
 
-const size = (n: number) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`
 const date = (s: string) => new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
 function ProjectHeader({ project, changed }: { project: Project; changed: (project: Project) => void }) {

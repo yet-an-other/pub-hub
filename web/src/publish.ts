@@ -36,8 +36,9 @@ export async function prepareFiles(files: ChosenFile[], bundle: boolean): Promis
   else if (kept.length > 2000) error = { code: 'too_many_files', message: 'Bundle exceeds 2,000 files' }
   const entry = bundle ? kept.find(f => f.path === 'index.html') : kept[0]
   const text = entry ? await entry.file.slice(0, 65536).text() : ''
-  const rawTitle = text.match(/<title(?:\s[^>]*)?>([\s\S]*?)<\/title\s*>/i)?.[1] || ''
-  const title = typeof DOMParser === 'undefined' ? rawTitle.trim() : new DOMParser().parseFromString(`<title>${rawTitle}</title>`, 'text/html').querySelector('title')?.textContent?.trim() || ''
+  const title = typeof DOMParser === 'undefined'
+    ? (text.match(/<title(?:\s[^>]*)?>([\s\S]*?)<\/title\s*>/i)?.[1] || '').trim()
+    : new DOMParser().parseFromString(text, 'text/html').querySelector('title')?.textContent?.trim() || ''
   return { files: kept, skipped, title, error }
 }
 

@@ -1,3 +1,5 @@
+export const size = (n: number) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`
+
 export type Artifact = { path: string; url: string; title: string; description: string; created_at: string; updated_at: string; last_publisher: string; total_size: number; file_count: number; state: string }
 export type Project = { name: string; description: string; artifact_count: number }
 export type Group = { project: Project; artifacts: Artifact[]; categories: { name: string; artifacts: Artifact[] }[] }
