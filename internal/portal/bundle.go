@@ -95,7 +95,7 @@ func (a *application) spoolBundle(w http.ResponseWriter, r *http.Request, prefix
 			if err != nil {
 				return dir, nil, 0, err
 			}
-			if len(body) > 4000 || !utf8.Valid(body) || utf8.RuneCount(body) > 1000 {
+			if !validDescriptionBytes(body) {
 				return dir, nil, 0, errors.New("description too long or invalid")
 			}
 			value := string(body)

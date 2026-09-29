@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -22,6 +23,91 @@ func TestNewRejectsANonLoopbackEndpoint(t *testing.T) {
 	if err == nil {
 		t.Fatal("New accepted a non-loopback endpoint")
 	}
+}
+
+func TestLoadRecordsIncludesProjectAndArtifactRecords(t *testing.T) {
+	var fetched []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pubhub-meta":
+			_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>xform.json</Key></Contents><Contents><Key>xform/notes/plan.json</Key></Contents><Contents><Key>readme.txt</Key></Contents></ListBucketResult>`)
+		case "/pubhub-meta/xform.json":
+			fetched = append(fetched, "xform.json")
+			_, _ = io.WriteString(w, `{"description":"A project"}`)
+		case "/pubhub-meta/xform/notes/plan.json":
+			fetched = append(fetched, "xform/notes/plan.json")
+			_, _ = io.WriteString(w, `{"artifact":"plan"}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	store := newTestStore(t, server)
+	records, err := store.LoadRecords(context.Background())
+	if err != nil {
+		t.Fatalf("LoadRecords: %v", err)
+	}
+	if want := []string{"xform.json", "xform/notes/plan.json"}; !reflect.DeepEqual(fetched, want) {
+		t.Errorf("fetched keys = %v, want %v", fetched, want)
+	}
+	if len(records) != 2 || string(records[0]) != `{"project":"xform","description":"A project"}` || string(records[1]) != `{"artifact":"plan"}` {
+		t.Errorf("records = %q, want Project and Artifact JSON", records)
+	}
+}
+
+func TestLoadRecordsValidatesProjectRecord(t *testing.T) {
+	for _, test := range []struct {
+		name, key, body, errorText string
+	}{
+		{"invalid JSON", "xform.json", `{`, `is not valid JSON`},
+		{"oversized", "xform.json", strings.Repeat(" ", 1<<20+1), `exceeds 1048576 bytes`},
+		{"missing description", "xform.json", `{}`, `must contain only a description`},
+		{"empty description", "xform.json", `{"description":""}`, `must contain a nonempty description`},
+		{"non-string description", "xform.json", `{"description":42}`, `must contain a nonempty description`},
+		{"extra field", "xform.json", `{"description":"A project","project":"other"}`, `must contain only a description`},
+		{"invalid Project name", "Bad.json", `{"description":"A project"}`, `invalid Project name`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/pubhub-meta":
+					_, _ = io.WriteString(w, strings.Replace(`<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>xform.json</Key></Contents></ListBucketResult>`, "xform.json", test.key, 1))
+				case "/pubhub-meta/" + test.key:
+					_, _ = io.WriteString(w, test.body)
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			store := newTestStore(t, server)
+			records, err := store.LoadRecords(context.Background())
+			if err == nil || !strings.Contains(err.Error(), test.key) || !strings.Contains(err.Error(), test.errorText) {
+				t.Fatalf("LoadRecords error = %v, want record key and %q", err, test.errorText)
+			}
+			if records != nil {
+				t.Errorf("records = %q, want nil on error", records)
+			}
+		})
+	}
+}
+
+func newTestStore(t *testing.T, server *httptest.Server) *s3store.Store {
+	t.Helper()
+	store, err := s3store.New(s3store.Config{
+		Endpoint:       server.URL,
+		ArtifactBucket: "pubhub-artifacts",
+		MetadataBucket: "pubhub-meta",
+		AccessKey:      "access",
+		SecretKey:      "secret",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return store
 }
 
 func TestPutArtifactDoesNotUseAWSChunkedOverTLS(t *testing.T) {

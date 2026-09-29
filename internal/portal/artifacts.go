@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yet-an-other/pub-hub/internal/auth"
 	"github.com/yet-an-other/pub-hub/internal/naming"
@@ -49,6 +50,16 @@ type artifactRecord struct {
 	TotalSize     int64     `json:"total_size"`
 	FileCount     int       `json:"file_count"`
 	State         string    `json:"state"`
+}
+
+type projectRecord struct {
+	Description string `json:"description"`
+}
+
+type projectView struct {
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	ArtifactCount int    `json:"artifact_count"`
 }
 
 type artifactView struct {
@@ -91,6 +102,7 @@ type application struct {
 	loaded bool
 	// records is keyed by the suffix-free Artifact stem.
 	records  map[string]artifactRecord
+	projects map[string]projectRecord
 	inFlight map[string]struct{}
 	// Writes to the metadata bucket and the in-memory index are serialized;
 	// object transfers happen outside this lock.
@@ -111,6 +123,7 @@ func newApplication(store artifactStore, publicBaseURL, spoolDir string, log *sl
 		log:           log,
 		now:           time.Now,
 		records:       make(map[string]artifactRecord),
+		projects:      make(map[string]projectRecord),
 		inFlight:      make(map[string]struct{}),
 	}
 }
@@ -158,8 +171,28 @@ func (a *application) reloadRecords(ctx context.Context) (int, int, error) {
 		return 0, 0, fmt.Errorf("load metadata records: %w", err)
 	}
 	records := make(map[string]artifactRecord, len(payloads))
+	projects := make(map[string]projectRecord)
 	incomplete := 0
 	for _, payload := range payloads {
+		var shape struct {
+			Path    string `json:"path"`
+			Project string `json:"project"`
+		}
+		if err := json.Unmarshal(payload, &shape); err != nil {
+			return 0, 0, fmt.Errorf("decode metadata record: %w", err)
+		}
+		if shape.Path == "" {
+			var project projectRecord
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(payload, &project); err != nil || json.Unmarshal(payload, &fields) != nil || !validDescription(project.Description) || project.Description == "" || len(fields) != 2 || fields["description"] == nil || fields["project"] == nil || naming.ValidateProject(shape.Project) != nil {
+				return 0, 0, fmt.Errorf("invalid Project metadata record")
+			}
+			if _, exists := projects[shape.Project]; exists {
+				return 0, 0, fmt.Errorf("duplicate Project record %q", shape.Project)
+			}
+			projects[shape.Project] = project
+			continue
+		}
 		var record artifactRecord
 		if err := json.Unmarshal(payload, &record); err != nil {
 			return 0, 0, fmt.Errorf("decode metadata record: %w", err)
@@ -182,6 +215,7 @@ func (a *application) reloadRecords(ctx context.Context) (int, int, error) {
 	}
 	a.mu.Lock()
 	a.records = records
+	a.projects = projects
 	a.loaded = true
 	a.mu.Unlock()
 	return len(records), incomplete, nil
@@ -272,8 +306,16 @@ func (a *application) apiRoutes(w http.ResponseWriter, r *http.Request) {
 		a.listArtifacts(w, r)
 		return
 	}
+	if path == "/projects" && r.Method == http.MethodGet {
+		a.listProjects(w, r)
+		return
+	}
+	if strings.HasPrefix(path, "/projects/") && r.Method == http.MethodPatch {
+		a.patchProject(w, r, strings.TrimPrefix(path, "/projects/"))
+		return
+	}
 	if strings.HasPrefix(path, "/artifacts/") {
-		if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodDelete {
+		if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodDelete && r.Method != http.MethodPatch {
 			auth.WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 			return
 		}
@@ -321,6 +363,10 @@ func (a *application) artifact(w http.ResponseWriter, r *http.Request, path stri
 	}
 	if r.Method == http.MethodDelete {
 		a.deleteArtifact(w, r, parsed)
+		return
+	}
+	if r.Method == http.MethodPatch {
+		a.patchArtifact(w, r, parsed)
 		return
 	}
 	a.publishArtifact(w, r, parsed)
@@ -426,7 +472,8 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 		a.publishBundle(w, r, path, publisher.Label, started)
 		return
 	}
-	file, size, err := a.spoolSingleFile(w, r)
+	var description *string
+	file, size, err := a.spoolSingleFile(w, r, &description)
 	if err != nil {
 		writeUploadError(w, err)
 		return
@@ -451,10 +498,14 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 	if exists {
 		createdAt = previous.CreatedAt
 	}
+	value := previous.Description
+	if description != nil {
+		value = *description
+	}
 	record := artifactRecord{
 		Path:          path.PublicPath(),
 		Title:         title,
-		Description:   previous.Description,
+		Description:   value,
 		CreatedAt:     createdAt,
 		UpdatedAt:     updatedAt,
 		LastPublisher: publisher.Label,
@@ -627,7 +678,15 @@ var (
 	errIndexMissing = errors.New("Bundle index missing")
 )
 
-func (a *application) spoolSingleFile(w http.ResponseWriter, r *http.Request) (*os.File, int64, error) {
+func validDescription(value string) bool {
+	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= 1000
+}
+
+func validDescriptionBytes(value []byte) bool {
+	return len(value) <= 4000 && validDescription(string(value))
+}
+
+func (a *application) spoolSingleFile(w http.ResponseWriter, r *http.Request, description **string) (*os.File, int64, error) {
 	if r.ContentLength > maxPublishBytes {
 		return nil, 0, errTooLarge
 	}
@@ -657,7 +716,7 @@ func (a *application) spoolSingleFile(w http.ResponseWriter, r *http.Request) (*
 			return nil, 0, fmt.Errorf("read multipart part: %w", err)
 		}
 		if part.FileName() == "" {
-			_, readErr := io.Copy(io.Discard, part)
+			body, readErr := io.ReadAll(io.LimitReader(part, 4001))
 			_ = part.Close()
 			if readErr != nil {
 				if file != nil {
@@ -666,7 +725,12 @@ func (a *application) spoolSingleFile(w http.ResponseWriter, r *http.Request) (*
 				}
 				return nil, 0, fmt.Errorf("read multipart field: %w", readErr)
 			}
-			unexpectedField = true
+			if part.FormName() != "description" || *description != nil || !validDescriptionBytes(body) {
+				unexpectedField = true
+			} else {
+				value := string(body)
+				*description = &value
+			}
 			continue
 		}
 		files++

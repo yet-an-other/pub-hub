@@ -86,6 +86,18 @@ func (p ArtifactPath) Stem() string {
 	return strings.Join(segments, "/")
 }
 
+// ValidateProject checks a single Project name.
+func ValidateProject(value string) error {
+	segments, err := validateSegments(value)
+	if err != nil {
+		return err
+	}
+	if len(segments) != 1 {
+		return fmt.Errorf("%w: expected one Project segment", ErrNameInvalid)
+	}
+	return nil
+}
+
 // ValidatePrefix checks an optional API list prefix. Unlike an Artifact path,
 // a prefix may name only a Project or Category and has no shape suffix.
 func ValidatePrefix(value string) error {

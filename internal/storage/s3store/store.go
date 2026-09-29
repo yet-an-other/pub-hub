@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/yet-an-other/pub-hub/internal/naming"
 )
 
 const maxRecordSize = 1 << 20
@@ -156,8 +157,9 @@ func (s *Store) PutRecord(ctx context.Context, key string, body []byte) error {
 	return err
 }
 
-// LoadRecords reads all nested JSON objects from the metadata bucket. Top-
-// level JSON objects are reserved for Project records.
+// LoadRecords reads Project and Artifact JSON records from the metadata bucket.
+// Project payloads gain their name from the top-level object key; the stored
+// record contains only the description.
 func (s *Store) LoadRecords(ctx context.Context) ([]json.RawMessage, error) {
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.metadataBucket),
@@ -169,7 +171,7 @@ func (s *Store) LoadRecords(ctx context.Context) ([]json.RawMessage, error) {
 			return nil, fmt.Errorf("list metadata records: %w", err)
 		}
 		for _, object := range page.Contents {
-			if object.Key == nil || !strings.HasSuffix(*object.Key, ".json") || !strings.Contains(*object.Key, "/") {
+			if object.Key == nil || !strings.HasSuffix(*object.Key, ".json") {
 				continue
 			}
 			response, err := s.client.GetObject(ctx, &s3.GetObjectInput{
@@ -192,6 +194,27 @@ func (s *Store) LoadRecords(ctx context.Context) ([]json.RawMessage, error) {
 			}
 			if !json.Valid(body) {
 				return nil, fmt.Errorf("metadata record %q is not valid JSON", *object.Key)
+			}
+			if !strings.Contains(*object.Key, "/") {
+				project := strings.TrimSuffix(*object.Key, ".json")
+				if project == "" || naming.ValidateProject(project) != nil {
+					return nil, fmt.Errorf("invalid Project name in metadata record %q", *object.Key)
+				}
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal(body, &fields); err != nil || len(fields) != 1 {
+					return nil, fmt.Errorf("metadata record %q must contain only a description", *object.Key)
+				}
+				var description string
+				if err := json.Unmarshal(fields["description"], &description); err != nil || description == "" {
+					return nil, fmt.Errorf("metadata record %q must contain a nonempty description", *object.Key)
+				}
+				body, err = json.Marshal(struct {
+					Project     string `json:"project"`
+					Description string `json:"description"`
+				}{Project: project, Description: description})
+				if err != nil {
+					return nil, fmt.Errorf("encode Project record %q: %w", *object.Key, err)
+				}
 			}
 			records = append(records, json.RawMessage(body))
 		}
