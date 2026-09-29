@@ -75,6 +75,39 @@ func TestBundlePublishAndReplace(t *testing.T) {
 	}
 }
 
+func TestCreateOnlyBundle(t *testing.T) {
+	store := newMemoryArtifactStore()
+	handler := newArtifactHandler(t, store)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, _ := writer.CreateFormFile("index.html", "index.html")
+	_, _ = io.WriteString(part, "<title>Original</title>")
+	_ = writer.Close()
+	publish := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPut, "http://hub.bdgn.me/api/artifacts/xform/demo/", bytes.NewReader(body.Bytes()))
+		request.Header.Set("Authorization", "Bearer test-pat")
+		request.Header.Set("Content-Type", writer.FormDataContentType())
+		request.Header.Set("If-None-Match", "*")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	if first := publish(); first.Code != http.StatusCreated {
+		t.Fatalf("create-only new Bundle = %d %s", first.Code, first.Body)
+	}
+	store.mu.Lock()
+	writes := len(store.recordWriteOrder)
+	store.mu.Unlock()
+	if second := publish(); second.Code != http.StatusPreconditionFailed || !strings.Contains(second.Body.String(), `"code":"exists"`) {
+		t.Errorf("create-only existing Bundle = %d %s", second.Code, second.Body)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.recordWriteOrder) != writes {
+		t.Errorf("rejected Bundle caused writes: %v", store.recordWriteOrder)
+	}
+}
+
 func TestBundleRejectsDuplicateAndTooManyFiles(t *testing.T) {
 	store := newMemoryArtifactStore()
 	handler := newArtifactHandler(t, store)

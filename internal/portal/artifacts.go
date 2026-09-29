@@ -379,10 +379,6 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 	a.mu.RLock()
 	previous, exists := a.records[stem]
 	a.mu.RUnlock()
-	if exists && previous.Path != path.PublicPath() {
-		auth.WriteError(w, http.StatusConflict, "shape_conflict", "Artifact shape conflicts with existing record")
-		return
-	}
 	createdAt := updatedAt
 	if exists {
 		createdAt = previous.CreatedAt
@@ -398,12 +394,8 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 		FileCount:     1,
 		State:         "incomplete",
 	}
-	if err := a.putRecord(r.Context(), stem, record); err != nil {
-		if errors.Is(err, errNestingConflict) {
-			auth.WriteError(w, http.StatusConflict, "nesting_conflict", "Artifact cannot nest inside another Artifact")
-			return
-		}
-		a.storageUnavailable(w, "write incomplete record", err)
+	if err := a.putRecord(r.Context(), stem, record, r.Header.Get("If-None-Match") == "*"); err != nil {
+		writeRecordError(w, a, err)
 		return
 	}
 
@@ -414,7 +406,7 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 	}
 
 	record.State = "published"
-	if err := a.putRecord(r.Context(), stem, record); err != nil {
+	if err := a.putRecord(r.Context(), stem, record, false); err != nil {
 		a.storageUnavailable(w, "write published record", err)
 		return
 	}
@@ -426,7 +418,11 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 	writeJSON(w, status, a.view(record))
 }
 
-var errNestingConflict = errors.New("Artifact nesting conflict")
+var (
+	errNestingConflict = errors.New("Artifact nesting conflict")
+	errShapeConflict   = errors.New("Artifact shape conflict")
+	errExists          = errors.New("Artifact already exists")
+)
 
 func (a *application) nestingConflict(stem string) bool {
 	a.mu.RLock()
@@ -439,15 +435,26 @@ func (a *application) nestingConflict(stem string) bool {
 	return false
 }
 
-func (a *application) putRecord(ctx context.Context, stem string, record artifactRecord) error {
+func (a *application) putRecord(ctx context.Context, stem string, record artifactRecord, createOnly bool) error {
 	body, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
 	a.recordWriteMu.Lock()
 	defer a.recordWriteMu.Unlock()
-	if record.State == "incomplete" && a.nestingConflict(stem) {
-		return errNestingConflict
+	if record.State == "incomplete" {
+		if a.nestingConflict(stem) {
+			return errNestingConflict
+		}
+		a.mu.RLock()
+		previous, exists := a.records[stem]
+		a.mu.RUnlock()
+		if exists && previous.Path != record.Path {
+			return errShapeConflict
+		}
+		if exists && createOnly {
+			return errExists
+		}
 	}
 	if err := a.store.PutRecord(ctx, stem+".json", body); err != nil {
 		return err
@@ -456,6 +463,19 @@ func (a *application) putRecord(ctx context.Context, stem string, record artifac
 	a.records[stem] = record
 	a.mu.Unlock()
 	return nil
+}
+
+func writeRecordError(w http.ResponseWriter, a *application, err error) {
+	switch {
+	case errors.Is(err, errNestingConflict):
+		auth.WriteError(w, http.StatusConflict, "nesting_conflict", "Artifact cannot nest inside another Artifact")
+	case errors.Is(err, errShapeConflict):
+		auth.WriteError(w, http.StatusConflict, "shape_conflict", "Artifact shape conflicts with existing record")
+	case errors.Is(err, errExists):
+		auth.WriteError(w, http.StatusPreconditionFailed, "exists", "Artifact already exists")
+	default:
+		a.storageUnavailable(w, "write incomplete record", err)
+	}
 }
 
 func (a *application) claim(stem string) bool {

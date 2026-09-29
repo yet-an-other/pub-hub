@@ -168,10 +168,6 @@ func (a *application) publishBundle(w http.ResponseWriter, r *http.Request, path
 	a.mu.RLock()
 	previous, exists := a.records[stem]
 	a.mu.RUnlock()
-	if exists && previous.Path != path.PublicPath() {
-		auth.WriteError(w, 409, "shape_conflict", "Artifact shape conflicts with existing record")
-		return
-	}
 	createdAt := updatedAt
 	if exists {
 		createdAt = previous.CreatedAt
@@ -181,12 +177,8 @@ func (a *application) publishBundle(w http.ResponseWriter, r *http.Request, path
 		value = *description
 	}
 	record := artifactRecord{Path: path.PublicPath(), Title: title, Description: value, CreatedAt: createdAt, UpdatedAt: updatedAt, LastPublisher: publisher, TotalSize: total, FileCount: len(files), State: "incomplete"}
-	if err := a.putRecord(r.Context(), stem, record); err != nil {
-		if errors.Is(err, errNestingConflict) {
-			auth.WriteError(w, http.StatusConflict, "nesting_conflict", "Artifact cannot nest inside another Artifact")
-			return
-		}
-		a.storageUnavailable(w, "write incomplete record", err)
+	if err := a.putRecord(r.Context(), stem, record, r.Header.Get("If-None-Match") == "*"); err != nil {
+		writeRecordError(w, a, err)
 		return
 	}
 	uploaded := make(map[string]struct{}, len(files))
@@ -221,7 +213,7 @@ func (a *application) publishBundle(w http.ResponseWriter, r *http.Request, path
 		return
 	}
 	record.State = "published"
-	if err := a.putRecord(r.Context(), stem, record); err != nil {
+	if err := a.putRecord(r.Context(), stem, record, false); err != nil {
 		a.storageUnavailable(w, "write published record", err)
 		return
 	}

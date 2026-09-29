@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -325,6 +326,129 @@ func TestArtifactNamesAndSuffixesAreRejectedBeforeStorageWrites(t *testing.T) {
 	defer store.mu.Unlock()
 	if len(store.records) != 0 || len(store.objects) != 0 {
 		t.Errorf("invalid paths caused storage writes: %d records, %d objects", len(store.records), len(store.objects))
+	}
+}
+
+func TestCreateOnlyRejectsExistingAndIncompleteArtifactsWithoutWrites(t *testing.T) {
+	for _, incomplete := range []bool{false, true} {
+		t.Run(fmt.Sprintf("incomplete=%t", incomplete), func(t *testing.T) {
+			store := newMemoryArtifactStore()
+			handler := newArtifactHandler(t, store)
+			first := multipartRequest(t, handler, "xform/plan.html", "plan.html", "<title>First</title>")
+			if first.Code != http.StatusCreated {
+				t.Fatalf("initial publish = %d %s", first.Code, first.Body)
+			}
+			if incomplete {
+				store.mu.Lock()
+				var record artifactRecord
+				_ = json.Unmarshal(store.records["xform/plan.json"], &record)
+				record.State = "incomplete"
+				store.records["xform/plan.json"], _ = json.Marshal(record)
+				store.mu.Unlock()
+				// Reload the incomplete record as a restarted Portal would.
+				handler = newArtifactHandler(t, store)
+			}
+			store.mu.Lock()
+			writes := len(store.recordWriteOrder)
+			store.mu.Unlock()
+			body, contentType := multipartFile(t, "plan.html", "<title>Second</title>")
+			request := httptest.NewRequest(http.MethodPut, "http://hub.bdgn.me/api/artifacts/xform/plan.html", bytes.NewReader(body))
+			request.Header.Set("Authorization", "Bearer test-pat")
+			request.Header.Set("Content-Type", contentType)
+			request.Header.Set("If-None-Match", "*")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusPreconditionFailed || !strings.Contains(response.Body.String(), `"code":"exists"`) {
+				t.Errorf("create-only replacement = %d %s, want 412 exists", response.Code, response.Body)
+			}
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			if len(store.recordWriteOrder) != writes || string(store.objects["xform/plan.html"]) != "<title>First</title>" {
+				t.Errorf("rejected publish changed storage: writes=%v objects=%v", store.recordWriteOrder, store.objects)
+			}
+		})
+	}
+}
+
+func TestPathConflictsLeaveRecordsAndBytesUntouched(t *testing.T) {
+	bundle := func(handler http.Handler, path string) *httptest.ResponseRecorder {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		part, err := writer.CreateFormFile("index.html", "index.html")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.WriteString(part, "<title>Bundle</title>")
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return artifactRequest(t, handler, http.MethodPut, "/api/artifacts/"+path, body.Bytes(), writer.FormDataContentType())
+	}
+	for _, tc := range []struct {
+		name, first, second, code string
+	}{
+		{"file above file", "a/b.html", "a/b/c.html", "nesting_conflict"},
+		{"bundle above file", "a/b/", "a/b/c.html", "nesting_conflict"},
+		{"file below file", "a/b/c.html", "a/b.html", "nesting_conflict"},
+		{"file below bundle", "a/b/c.html", "a/b/", "nesting_conflict"},
+		{"file before bundle", "a/plan.html", "a/plan/", "shape_conflict"},
+		{"bundle before file", "a/plan/", "a/plan.html", "shape_conflict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newMemoryArtifactStore()
+			handler := newArtifactHandler(t, store)
+			publish := func(path string) *httptest.ResponseRecorder {
+				if strings.HasSuffix(path, "/") {
+					return bundle(handler, path)
+				}
+				return multipartRequest(t, handler, path, "file.html", "<title>File</title>")
+			}
+			if first := publish(tc.first); first.Code != http.StatusCreated {
+				t.Fatalf("initial PUT = %d %s", first.Code, first.Body)
+			}
+			store.mu.Lock()
+			writes := len(store.recordWriteOrder)
+			store.mu.Unlock()
+			second := publish(tc.second)
+			if second.Code != http.StatusConflict || !strings.Contains(second.Body.String(), `"code":"`+tc.code+`"`) {
+				t.Errorf("conflicting PUT = %d %s, want 409 %s", second.Code, second.Body, tc.code)
+			}
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			if len(store.recordWriteOrder) != writes || len(store.records) != 1 || len(store.objects) != 1 {
+				t.Errorf("conflict touched storage: order=%v records=%v objects=%v", store.recordWriteOrder, store.records, store.objects)
+			}
+		})
+	}
+}
+
+func TestConcurrentPublishesCannotNest(t *testing.T) {
+	store := newMemoryArtifactStore()
+	store.blockObjectWrites = true
+	store.objectWriteStarted = make(chan struct{}, 1)
+	store.releaseObjectWrites = make(chan struct{})
+	handler := newArtifactHandler(t, store)
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		firstDone <- multipartRequest(t, handler, "a/b.html", "b.html", "<title>Parent</title>")
+	}()
+	select {
+	case <-store.objectWriteStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("parent did not reach object storage")
+	}
+	child := multipartRequest(t, handler, "a/b/c.html", "c.html", "<title>Child</title>")
+	if child.Code != http.StatusConflict || !strings.Contains(child.Body.String(), `"code":"nesting_conflict"`) {
+		t.Errorf("child = %d %s, want nesting_conflict", child.Code, child.Body)
+	}
+	close(store.releaseObjectWrites)
+	if first := <-firstDone; first.Code != http.StatusCreated {
+		t.Errorf("parent = %d %s", first.Code, first.Body)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.records) != 1 || len(store.objects) != 1 {
+		t.Errorf("rejected child touched storage: records=%v objects=%v", store.records, store.objects)
 	}
 }
 
