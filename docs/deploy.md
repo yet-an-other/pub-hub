@@ -20,8 +20,8 @@ Releases are GitHub Releases, cut by pushing a `v*` tag. Each carries `pubhub-po
 ## Cut a release
 
 ```sh
-git tag v0.10.0
-git push origin v0.10.0
+git tag v0.11.0
+git push origin v0.11.0
 ```
 
 The Release workflow runs vet and tests, then publishes the binaries and checksums.
@@ -253,7 +253,7 @@ The Portal sends `Authorization: Bearer <PAT>` to `/api/` and introspects the PA
 **(owner, host)** Pick the version and the host's architecture (`amd64` or `arm64`), then download and verify:
 
 ```sh
-VERSION=v0.10.0
+VERSION=v0.11.0
 ARCH=amd64
 BASE=https://github.com/yet-an-other/pub-hub/releases/download/$VERSION
 curl -fLO "$BASE/pubhub-portal-linux-$ARCH"
