@@ -20,8 +20,8 @@ Releases are GitHub Releases, cut by pushing a `v*` tag. Each carries `pubhub-po
 ## Cut a release
 
 ```sh
-git tag v0.11.0
-git push origin v0.11.0
+git tag v0.12.0
+git push origin v0.12.0
 ```
 
 The Release workflow runs vet and tests, then publishes the binaries and checksums.
