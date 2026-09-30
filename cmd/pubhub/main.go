@@ -39,11 +39,15 @@ func main() {
 func (c *cli) run(args []string) int {
 	var err error
 	if len(args) == 0 {
-		err = local("usage", "expected publish, whoami or login")
+		err = local("usage", "expected publish, list, delete, whoami or login")
 	} else {
 		switch args[0] {
 		case "publish":
 			err = c.publish(args[1:])
+		case "list":
+			err = c.list(args[1:])
+		case "delete":
+			err = c.delete(args[1:])
 		case "whoami":
 			if len(args) != 1 {
 				err = local("usage", "whoami takes no arguments")
