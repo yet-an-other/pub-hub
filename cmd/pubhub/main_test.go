@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yet-an-other/pub-hub/internal/buildversion"
 )
 
 func fake(t *testing.T, handler http.HandlerFunc) (*cli, *bytes.Buffer, *bytes.Buffer, func()) {
@@ -128,7 +130,7 @@ func TestWhoamiAndLogin(t *testing.T) {
 		fmt.Fprint(w, `{"label":"owner"}`)
 	})
 	defer done()
-	if c.run([]string{"whoami"}) != 0 || out.String() != "owner\n" {
+	if c.run([]string{"whoami"}) != 0 || !strings.HasPrefix(out.String(), "Publisher: owner\nCLI: ") || !strings.Contains(out.String(), "\nPortal: unknown\n") {
 		t.Fatal(out.String(), stderr.String())
 	}
 	c.in = strings.NewReader("secret\n")
@@ -142,7 +144,7 @@ func TestWhoamiAndLogin(t *testing.T) {
 	}
 	t.Setenv("PUBHUB_TOKEN", "")
 	out.Reset()
-	if c.run([]string{"whoami"}) != 0 || out.String() != "owner\n" {
+	if c.run([]string{"whoami"}) != 0 || !strings.HasPrefix(out.String(), "Publisher: owner\nCLI: ") || !strings.Contains(out.String(), "\nPortal: unknown\n") {
 		t.Fatal(out.String(), stderr.String())
 	}
 	os.Chmod(path, 0644)
@@ -150,6 +152,40 @@ func TestWhoamiAndLogin(t *testing.T) {
 		t.Fatal(exit)
 	}
 }
+func TestVersionNeedsNoPortalOrCredentials(t *testing.T) {
+	c, out, stderr, done := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("version made an API request")
+	})
+	defer done()
+	t.Setenv("PUBHUB_TOKEN", "")
+	if exit := c.run([]string{"version"}); exit != 0 || strings.TrimSpace(out.String()) == "" || strings.Contains(out.String(), "Portal:") || !strings.HasSuffix(out.String(), "\n") {
+		t.Fatalf("version: exit %d stdout %q stderr %q", exit, out, stderr)
+	}
+}
+
+func TestVersionUsesEmbeddedReleaseTag(t *testing.T) {
+	previous := buildversion.Release
+	buildversion.Release = "v9.8.7"
+	defer func() { buildversion.Release = previous }()
+	c, out, stderr, done := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("version made an API request")
+	})
+	defer done()
+	if exit := c.run([]string{"version"}); exit != 0 || out.String() != "v9.8.7\n" {
+		t.Fatalf("version: exit %d stdout %q stderr %q", exit, out, stderr)
+	}
+}
+
+func TestWhoamiPrintsPortalVersion(t *testing.T) {
+	c, out, stderr, done := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"label":"owner","portal_version":"v0.13.0"}`)
+	})
+	defer done()
+	if exit := c.run([]string{"whoami"}); exit != 0 || !strings.Contains(out.String(), "Portal: v0.13.0\n") {
+		t.Fatalf("whoami: exit %d stdout %q stderr %q", exit, out, stderr)
+	}
+}
+
 func TestLocalLimitsAndMissingEntry(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := inspect(dir, "proj/demo", ""); err == nil || !strings.Contains(err.Error(), "index_missing") {

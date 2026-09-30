@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/yet-an-other/pub-hub/internal/buildversion"
 )
 
 type cli struct {
@@ -39,7 +41,7 @@ func main() {
 func (c *cli) run(args []string) int {
 	var err error
 	if len(args) == 0 {
-		err = local("usage", "expected publish, list, delete, whoami or login")
+		err = local("usage", "expected publish, list, delete, whoami, version or login")
 	} else {
 		switch args[0] {
 		case "publish":
@@ -48,6 +50,12 @@ func (c *cli) run(args []string) int {
 			err = c.list(args[1:])
 		case "delete":
 			err = c.delete(args[1:])
+		case "version":
+			if len(args) != 1 {
+				err = local("usage", "version takes no arguments")
+			} else {
+				_, err = fmt.Fprintln(c.out, buildversion.Current())
+			}
 		case "whoami":
 			if len(args) != 1 {
 				err = local("usage", "whoami takes no arguments")
@@ -187,8 +195,12 @@ func (c *cli) whoami() error {
 	if label == "" {
 		label, _ = result["label"].(string)
 	}
-	fmt.Fprintln(c.out, label)
-	return nil
+	portalVersion, _ := result["portal_version"].(string)
+	if portalVersion == "" {
+		portalVersion = "unknown"
+	}
+	_, err = fmt.Fprintf(c.out, "Publisher: %s\nCLI: %s\nPortal: %s\n", label, buildversion.Current(), portalVersion)
+	return err
 }
 func jsonOutput(out io.Writer, data []byte) error {
 	var compact bytes.Buffer

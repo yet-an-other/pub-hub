@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/yet-an-other/pub-hub/internal/auth"
+	"github.com/yet-an-other/pub-hub/internal/buildversion"
 	"github.com/yet-an-other/pub-hub/internal/naming"
 	htmltokenizer "golang.org/x/net/html"
 )
@@ -261,8 +262,9 @@ func (a *application) apiRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, struct {
-			Label string `json:"label"`
-		}{Label: publisher.Label})
+			Label         string `json:"label"`
+			PortalVersion string `json:"portal_version"`
+		}{Label: publisher.Label, PortalVersion: buildversion.Current()})
 		return
 	}
 	if path == "/config" {

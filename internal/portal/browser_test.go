@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/yet-an-other/pub-hub/internal/buildversion"
 )
 
 func TestBrowserAPIUsesOwnerIdentityAndTheSameHandlers(t *testing.T) {
@@ -16,7 +18,7 @@ func TestBrowserAPIUsesOwnerIdentityAndTheSameHandlers(t *testing.T) {
 	}{
 		{"/ui/api/whoami", "", 401, ""},
 		{"/ui/api/whoami", "other@example.test", 403, ""},
-		{"/ui/api/whoami", "owner@example.test", 200, `"label":"owner@example.test"`},
+		{"/ui/api/whoami", "owner@example.test", 200, `"label":"owner@example.test","portal_version":"`},
 		{"/ui/api/artifacts", "owner@example.test", 200, `[]`},
 	} {
 		r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me"+tc.path, nil)
@@ -32,6 +34,20 @@ func TestBrowserAPIUsesOwnerIdentityAndTheSameHandlers(t *testing.T) {
 		if w.Header().Get("Access-Control-Allow-Origin") != "" {
 			t.Errorf("unexpected CORS header: %v", w.Header())
 		}
+	}
+}
+
+func TestWhoamiReportsPortalReleaseVersion(t *testing.T) {
+	previous := buildversion.Release
+	buildversion.Release = "v9.8.7"
+	defer func() { buildversion.Release = previous }()
+	h := newArtifactHandler(t, newMemoryArtifactStore())
+	r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me/ui/api/whoami", nil)
+	r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"label":"owner@example.test","portal_version":"v9.8.7"`) {
+		t.Fatalf("whoami = %d: %s", w.Code, w.Body.String())
 	}
 }
 

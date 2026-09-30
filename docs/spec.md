@@ -234,7 +234,7 @@ Existing browser sessions last until they expire, even while Zitadel is down ([#
 
 - Every authenticated Publisher has full rights: publish, replace, delete and edit descriptions, anywhere. There are no per-credential scopes ([ADR 0004], [#7]).
 - The **Publisher label**, recorded as "last Publisher", is the allowlist label for a machine Publisher and the owner's email for a publish from the Catalogue ([#7]).
-- `GET /api/whoami` returns the caller's label ([#8]).
+- `GET /api/whoami` returns the caller's label and Portal version ([#8]).
 
 ## 5. Storage and serving
 
@@ -377,7 +377,7 @@ The API path equals the Artifact's public path: `pub.bdgn.me/xform/notes/plan.ht
 | `GET /api/artifacts?prefix=…` | List, with no pagination (the list is in memory and single-tenant) |
 | `GET /api/projects` | Projects with their description and Artifact count, including empty described ones |
 | `PATCH /api/projects/<project>` | `{"description": …}`, where an empty value clears it |
-| `GET /api/whoami` | The caller's Publisher label |
+| `GET /api/whoami` | The caller's Publisher label and Portal version (`portal_version`) |
 
 - Paths are strict: `…/plan` without a suffix is a `404`.
 - There is no version prefix. Changes stay additive.
@@ -503,6 +503,7 @@ pubhub publish <file|dir> <project>/<category…>/<name> [-d "description"] [--n
 pubhub list [prefix] [--json]
 pubhub delete <path> [--yes]
 pubhub whoami
+pubhub version
 pubhub login
 ```
 
@@ -526,7 +527,8 @@ From [#10]:
 
 From [#10]:
 
-- On success, stdout carries only the URL. `--json` prints the full API metadata instead.
+- `publish` prints only the URL on success, or full API metadata with `--json`. `list` prints a table or full API metadata with `--json`; `delete` prints nothing on success.
+- `whoami` prints the Publisher, CLI version and Portal version on separate labelled lines. If the Portal does not return `portal_version`, it prints `unknown`. `version` prints only the CLI version without credentials or a Portal request. Release binaries report their tag; other builds use Go module build information or `dev` with the short commit and optional `-dirty` suffix.
 - Progress, warnings and skipped files go to stderr.
 - Errors print as `error: <code>: <message>`, using the API's codes.
 

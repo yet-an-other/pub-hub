@@ -24,7 +24,7 @@ git tag v0.12.0
 git push origin v0.12.0
 ```
 
-The Release workflow runs vet and tests, then publishes the binaries and checksums.
+The Release workflow runs vet and tests, embeds the tag as the CLI and Portal versions, then publishes the binaries and checksums.
 
 ## Install
 

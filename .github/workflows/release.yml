@@ -42,14 +42,14 @@ jobs:
           mkdir dist
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
-              go build -trimpath -ldflags="-s -w" \
+              go build -trimpath -ldflags="-s -w -X github.com/yet-an-other/pub-hub/internal/buildversion.Release=$GITHUB_REF_NAME" \
               -o "dist/pubhub-portal-linux-$arch" ./cmd/pubhub-portal
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
-              go build -trimpath -ldflags="-s -w" \
+              go build -trimpath -ldflags="-s -w -X github.com/yet-an-other/pub-hub/internal/buildversion.Release=$GITHUB_REF_NAME" \
               -o "dist/pubhub-linux-$arch" ./cmd/pubhub
           done
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-            go build -trimpath -ldflags="-s -w" \
+            go build -trimpath -ldflags="-s -w -X github.com/yet-an-other/pub-hub/internal/buildversion.Release=$GITHUB_REF_NAME" \
             -o dist/pubhub-darwin-arm64 ./cmd/pubhub
           cd dist && sha256sum pubhub-* > checksums.txt
       - name: Publish release
