@@ -38,6 +38,28 @@ func TestListArtifacts(t *testing.T) {
 	}
 }
 
+func TestListLargeCatalogue(t *testing.T) {
+	var payload strings.Builder
+	payload.WriteByte('[')
+	for i := 0; i < 2400; i++ {
+		if i > 0 {
+			payload.WriteByte(',')
+		}
+		fmt.Fprintf(&payload, `{"path":"xform/n%d.html","description":"%s"}`, i, strings.Repeat("a", 900))
+	}
+	payload.WriteByte(']')
+	if payload.Len() <= 2<<20 {
+		t.Fatal("fixture must exceed former response limit")
+	}
+	c, out, stderr, done := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, payload.String())
+	})
+	defer done()
+	if exit := c.run([]string{"list", "--json"}); exit != 0 || out.String() != payload.String()+"\n" {
+		t.Fatalf("large list: exit %d output bytes %d stderr %q", exit, out.Len(), stderr)
+	}
+}
+
 func TestDeleteArtifact(t *testing.T) {
 	calls := 0
 	c, out, stderr, done := fake(t, func(w http.ResponseWriter, r *http.Request) {

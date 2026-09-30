@@ -27,15 +27,7 @@ func (c *cli) list(args []string) error {
 	flags := flag.NewFlagSet("list", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	asJSON := flags.Bool("json", false, "print full API metadata")
-	var options, positionals []string
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
-			options = append(options, arg)
-		} else {
-			positionals = append(positionals, arg)
-		}
-	}
-	if err := flags.Parse(append(options, positionals...)); err != nil {
+	if err := flags.Parse(flagsFirst(args)); err != nil {
 		return local("usage", err.Error())
 	}
 	if flags.NArg() > 1 {
@@ -79,15 +71,7 @@ func (c *cli) delete(args []string) error {
 	flags := flag.NewFlagSet("delete", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	yes := flags.Bool("yes", false, "skip confirmation")
-	var options, positionals []string
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
-			options = append(options, arg)
-		} else {
-			positionals = append(positionals, arg)
-		}
-	}
-	if err := flags.Parse(append(options, positionals...)); err != nil {
+	if err := flags.Parse(flagsFirst(args)); err != nil {
 		return local("usage", err.Error())
 	}
 	if flags.NArg() != 1 {
@@ -117,6 +101,18 @@ func (c *cli) delete(args []string) error {
 	}
 	_, err = c.call(http.MethodDelete, "/api/artifacts/"+path.PublicPath(), token, base, "", nil, false)
 	return err
+}
+
+func flagsFirst(args []string) []string {
+	var options, positionals []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			options = append(options, arg)
+		} else {
+			positionals = append(positionals, arg)
+		}
+	}
+	return append(options, positionals...)
 }
 
 func nameError(err error) error {

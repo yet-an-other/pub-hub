@@ -119,7 +119,11 @@ func (c *cli) call(method, path, token, base, contentType string, body func() (i
 			}
 			return nil, err
 		}
-		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		var response io.Reader = io.LimitReader(resp.Body, 2<<20)
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			response = resp.Body
+		}
+		data, readErr := io.ReadAll(response)
 		resp.Body.Close()
 		if reader != nil {
 			reader.Close()
