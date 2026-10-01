@@ -444,12 +444,13 @@ The Catalogue is the Portal SPA at `hub.bdgn.me/`, calling the API under `/ui/ap
   - An empty described Project shows "No Artifacts yet".
 - **Order**: Projects by most recent activity, with empty ones last.
 - **Categories**: sub-headings inside each Project. Artifacts directly under the Project come first.
-- **Artifact row**: title in larger, bold type; full public URL as a link on the next line; private description below it, including line breaks. Text shares one font family, and there is no accordion.
+- **Artifact row**: the file or Bundle icon sits left of the title. The full public URL and private description follow below, aligned with the title; the description keeps line breaks. Text shares one font family, and there is no accordion.
+  - A small copy icon follows the URL. The last publish date and Artifact size sit on the right, before the action buttons.
   - An Incomplete badge and warning appear when relevant ([#17]).
 
 ### 7.3 Row actions
 
-Small Edit, Copy URL, Republish and Delete buttons sit in a block to the right of each Artifact (below the text on narrow screens).
+Small Edit, Republish and Delete buttons sit in a vertical line to the right of each Artifact (below the text and metadata on narrow screens).
 - Edit opens an inline description form, with plain text up to 1,000 characters.
 - Republish opens the publish form in place, with the path fixed.
 - Delete asks for confirmation in the row: "Readers get 404 at once; there is no undo".

@@ -57,21 +57,28 @@ kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 
 .row { border-top: 1px solid #e4e6df }
 .row:hover { background: #f6f6f280 }
-.row-main { display: grid; grid-template-columns: minmax(0, 1fr) 180px; align-items: start; gap: 24px; padding: 16px 24px 16px 56px }
+.row-main { display: grid; grid-template-columns: 18px minmax(0, 1fr) 110px 120px; align-items: start; gap: 16px; padding: 16px 24px 16px 56px }
 .category-group .row-main { padding-left: 80px }
+.row-icon { color: #78716c; padding-top: 2px }
 .row-content { min-width: 0; font-size: 14px }
 .row-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere }
 .row-title strong { font-size: 16px; font-weight: 650 }
-.artifact-link { display: block; margin-top: 4px; color: #57534e; text-decoration: underline; text-decoration-color: #d6d3d1; text-underline-offset: 3px; overflow-wrap: anywhere }
+.artifact-url { margin-top: 4px; overflow-wrap: anywhere }
+.artifact-link { color: #57534e; text-decoration: underline; text-decoration-color: #d6d3d1; text-underline-offset: 3px; overflow-wrap: anywhere }
+.copy-link { display: inline-flex; vertical-align: middle; padding: 2px; margin-left: 2px; color: #78716c; border-radius: 4px }
+.copy-link:hover { color: #245a43; background: #eef4ef }
+.copy-link svg { width: 14px; height: 14px }
 .description { margin: 6px 0 0; color: #57534e; white-space: pre-wrap; overflow-wrap: anywhere }
 .badge { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; padding: 2px 6px; border-radius: 5px; font-size: 11px; white-space: nowrap }
-.row-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px }
+.row-meta { display: flex; flex-direction: column; gap: 4px; color: #78716c; font-size: 12px; text-align: right; white-space: nowrap }
+.row-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px }
+.row-actions > button { width: 96px }
 .row-actions button, .description-form button, .project-description form button { padding: 5px 8px; border: 1px solid #d6d3d1; border-radius: 5px; background: white; font-size: 12px; white-space: nowrap }
 .row-actions button:hover, .description-form button:hover { border-color: #2f6b50 }
 .row-actions button:disabled { opacity: .5; cursor: default }
 .row-actions .danger { color: #991b1b }
-.delete-confirm { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px; border: 1px solid #fecaca; border-radius: 6px; background: #fef2f2 }
-.delete-confirm p { grid-column: 1 / -1; margin: 0; color: #991b1b; font-size: 12px }
+.delete-confirm { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid #fecaca; border-radius: 6px; background: #fef2f2 }
+.delete-confirm p { margin: 0; color: #991b1b; font-size: 12px }
 .delete-confirm button { padding: 5px 4px; font-size: 11px }
 .description-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 0 }
 .description-form label, .description-form textarea { width: 100% }
@@ -99,9 +106,11 @@ kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
   .top-inner { padding: 12px 16px }
   .private, .email, .divider { display: none }
   .hero { flex-wrap: wrap }
-  .row-main { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 16px }
+  .row-main { grid-template-columns: 18px minmax(0, 1fr); gap: 12px; padding: 16px }
   .category-group .row-main { padding-left: 32px }
-  .row-actions { justify-self: end; width: 180px }
+  .row-meta, .row-actions { grid-column: 2; justify-self: end; width: 120px }
+  .row-meta { grid-row: 2 }
+  .row-actions { grid-row: 3 }
   .category { padding-left: 32px }
   .project-head { padding: 12px 16px }
   .empty { padding: 16px }
