@@ -126,8 +126,7 @@ Artifacts are arbitrary HTML and JS. They come from the owner and their agents, 
 
 - The Portal has no raw, download or preview route.
 - It never renders Artifact HTML on its own origin: no `<iframe srcdoc>` and no `blob:` previews.
-- Catalogue previews are cross-origin iframes of the `pub.` URL.
-- The Catalogue prototype previews mock data through `srcdoc`. That must not carry over.
+- The Catalogue does not embed Artifact previews. Its links open on the `pub.` host.
 
 Why a sibling host ([#2], [ADR 0002]):
 
@@ -429,7 +428,7 @@ Every error is `{"error": {"code": "…", "message": "…"}}` with a stable code
 
 ## 7. Catalogue UI
 
-The Catalogue is the Portal SPA at `hub.bdgn.me/`, calling the API under `/ui/api/`. It is one wide inventory list grouped by Project. This is variant B of the second prototype round ([#9]; [prototype]: open `catalogue-v2.prototype.html?variant=B`).
+The Catalogue is the Portal SPA at `hub.bdgn.me/`, calling the API under `/ui/api/`. It is one wide inventory list grouped by Project. The layout follows variant B of the second prototype round ([#9]; [prototype]: open `catalogue-v2.prototype.html?variant=B`), except that the public link is visible on each row and there is no preview.
 
 ### 7.1 Page
 
@@ -447,18 +446,14 @@ The Catalogue is the Portal SPA at `hub.bdgn.me/`, calling the API under `/ui/ap
 - **Categories**: sub-headings inside each Project. Artifacts directly under the Project come first.
 - **Compact row**:
   - a kind icon (file or Bundle);
-  - the title;
-  - the name (`auth-seam.html` / `roster-sync/`);
+  - the title, a direct link on the name (`auth-seam.html` / `roster-sync/`) and a copy-link button;
   - an Incomplete badge when relevant;
-  - a one-line description;
+  - a one-line description beneath the title, not in a separate column;
   - the updated date and the size.
 
 ### 7.3 Expanded row
 
-Clicking a row toggles it open:
-
-- A thumbnail preview: a scaled cross-origin iframe of the live `pub.` URL, loaded only on expand (§3.1). Clicking it opens the Artifact.
-- The full URL, with copy-link and open buttons.
+Clicking the title or chevron expands the row. The public link and copy-link button remain visible in the compact row; there is no preview or repeated link.
 - The full description, click-to-edit, plain text up to 1,000 characters.
 - "Updated … by <Publisher>", the created time, the file count and the size.
 - For an incomplete Artifact, the note "The last publish or delete didn't finish. Readers may see mixed files or 404s. Publish again or delete to finish." ([#17]).

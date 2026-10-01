@@ -1,12 +1,126 @@
 @import "tailwindcss";
-:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #292524; background: #faf9f6; font-synthesis: none }
-button, input { font: inherit } button { cursor: pointer } a { color: #57534e; text-decoration: none } a:hover { color: #116149; text-decoration: underline } button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid #187355; outline-offset: 2px }
-.top { background: white; border-bottom: 1px solid #e7e5e4 } .top-inner { max-width: 1152px; margin: auto; padding: 14px 32px; display: flex; align-items: center; gap: 16px; font-size: 14px; flex-wrap: wrap } .top-inner b { font-size: 19px; letter-spacing: -.04em } .mark { width: 32px; height: 32px; display: grid; place-items: center; background: #176347; color: white; border-radius: 8px; font: 24px Georgia, serif } .spacer { flex: 1 } .divider { height: 20px; border-left: 1px solid #e7e5e4 } .muted { color: #78716c } .email { color: #57534e }
-main { max-width: 1152px; margin: 0 auto; padding: 54px 32px 100px } .hero { display: flex; align-items: end; justify-content: space-between; gap: 16px } .eyebrow { font-size: 12px; letter-spacing: .15em; text-transform: uppercase; color: #176347; font-weight: 700 } h1 { font-size: clamp(27px, 4vw, 38px); letter-spacing: -.045em; font-weight: 650; margin: 8px 0 } .count { border: 1px solid #e7e5e4; background: white; color: #78716c; font-size: 14px; padding: 2px 8px; border-radius: 6px; vertical-align: middle; letter-spacing: 0 } .hero p { font-size: 14px } .private { font-size: 12px; white-space: nowrap }
-.notice { display: flex; gap: 12px; align-items: center; margin-top: 28px; padding: 12px 16px; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; color: #78350f; font-size: 14px } .notice button { margin-left: auto; color: inherit; text-decoration: underline }
-.toolbar { display: flex; gap: 12px; align-items: center; margin: 30px 0 20px; font-size: 14px; flex-wrap: wrap } .toolbar > button { padding: 7px 10px; color: #78716c; border-radius: 6px } .toolbar > button[aria-pressed=true] { color: #14573f; background: #e8f4ed; border: 1px solid #cce6d6 } .toolbar small { color: #a8a29e; margin-left: 4px } .search { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: white; border: 1px solid #e7e5e4; border-radius: 8px; width: min(100%, 420px) } .search:focus-within { border-color: #176347 } .search input { flex: 1; min-width: 0; outline: 0; font-size: 14px } kbd { color: #a8a29e; border: 1px solid #e7e5e4; padding: 0 5px; border-radius: 4px }
-.project { border: 1px solid #e7e5e4; border-radius: 9px; background: white; margin-bottom: 20px; overflow: hidden } .project-head { background: #f5f5f4; padding: 16px 20px; border-bottom: 1px solid #e7e5e4; display: flex; align-items: center; gap: 32px } .project-head h2 { font-size: 18px; font-weight: 650; margin: 0 0 3px } .project-head code { font-size: 12px; color: #78716c } .project-head p { margin: 0; color: #57534e; font-size: 14px } .project-description { flex: 1; min-width: 0 } .project-description > .edit-description { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap } .project-description form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px } .project-description label { width: 100%; color: #57534e; font-size: 12px } .project-description input { flex: 1; min-width: 160px; padding: 6px; border: 1px solid #a8a29e; border-radius: 4px } .category { padding: 10px 20px; margin: 0; background: #fafaf9; border-top: 1px solid #e7e5e4; color: #57534e; font-size: 13px; font-weight: 600 }
-.row { border-top: 1px solid #f5f5f4 } .row-button { display: flex; width: 100%; text-align: left; align-items: center; gap: 16px; padding: 14px 20px; font-size: 14px } .row-button:hover { background: #fafaf9 } .kind { color: #176347; font-size: 22px } .identity { min-width: 170px; width: 22%; display: flex; flex-direction: column; gap: 3px; overflow: hidden } .identity strong, .identity small, .summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap } .identity small { color: #78716c; font: 12px ui-monospace, monospace } .summary { flex: 1; color: #78716c } .updated { width: 152px; color: #78716c; font-size: 12px } .bytes { width: 65px; color: #78716c; text-align: right; font-size: 12px } .badge { background: #fef3c7; color: #92400e; padding: 3px 7px; border-radius: 5px; font-size: 11px; white-space: nowrap }
-.details { padding: 18px 20px 22px 56px; background: #fafaf9; border-top: 1px solid #e7e5e4; display: flex; gap: 24px } .preview { display: block; position: relative; width: 210px; height: 138px; flex: none; overflow: hidden; border: 1px solid #e7e5e4; background: white; border-radius: 5px } .preview iframe { width: 840px; height: 552px; border: 0; transform: scale(.25); transform-origin: top left; pointer-events: none } .preview:after { content: ''; position: absolute; inset: 0 } .detail-copy { min-width: 0; flex: 1; font-size: 14px } .url { display: flex; align-items: center; gap: 12px; flex-wrap: wrap } .url code { overflow-wrap: anywhere; color: #176347 } .url button, .url a { color: #176347; text-decoration: underline; white-space: nowrap } .description { white-space: pre-wrap; overflow-wrap: anywhere } .edit-description { text-align: left; color: #57534e; padding: 4px 0; overflow-wrap: anywhere } .edit-description:hover { color: #116149; text-decoration: underline } .description-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 14px 0 } .description-form label, .description-form textarea { width: 100% } .description-form textarea { min-height: 80px; padding: 8px; border: 1px solid #a8a29e; border-radius: 4px; resize: vertical } .description-form button, .project-description form button, .delete-confirm button { padding: 5px 10px; border: 1px solid #d6d3d1; border-radius: 5px; background: white } .meta { color: #78716c; font-size: 12px; line-height: 1.9 } .warning { color: #92400e; background: #fffbeb; padding: 10px; border-radius: 6px } .danger { color: #991b1b; padding: 5px 0 } .delete-confirm { margin-top: 14px; padding: 12px; border: 1px solid #fecaca; border-radius: 6px; background: #fef2f2 } .delete-confirm p { margin: 0 0 8px; color: #991b1b } .delete-confirm button + button { margin-left: 8px } .mutation-error { color: #991b1b; font-size: 13px; overflow-wrap: anywhere } .mutation-error button { color: #991b1b; text-decoration: underline } .empty { padding: 18px 20px; color: #78716c; font-size: 14px }
-.publish-button, .publish-actions button:first-child { background: #176347; color: white; padding: 9px 18px; border-radius: 6px } .drop-target.active { outline: 2px dashed #176347; outline-offset: -3px; background: #e8f4ed } .publish-form { padding: 20px; margin: 12px 0; border: 1px solid #cce6d6; background: #f7fbf8; border-radius: 8px; display: grid; gap: 12px; font-size: 14px } .publish-form h3, .publish-form p { margin: 0 } .choose, .publish-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px } .choose label { display: grid; gap: 4px } .path-label { display: grid; gap: 5px } .path-label input, .path-label textarea { border: 1px solid #a8a29e; padding: 8px; border-radius: 5px; min-width: 0; width: 100% } .path-label textarea { min-height: 70px } .publish-actions button:last-child { padding: 9px } .publish-form progress { width: min(100%, 350px); accent-color: #176347 }
-@media (max-width: 750px) { main { padding: 32px 16px } .top-inner { padding: 12px 16px } .private, .summary, .updated, .email, .divider { display: none } .identity { flex: 1; min-width: 0 } .details { padding: 16px; flex-direction: column } .project-head { display: block } .project-description { margin-top: 8px } }
+
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #292524; background: #f6f6f2; font-synthesis: none }
+button, input, textarea { font: inherit }
+button { cursor: pointer }
+a { color: #57534e; text-decoration: none }
+a:hover { color: #245a43; text-decoration: underline }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #2f6b50; outline-offset: 2px }
+.muted { color: #78716c }
+.spacer { flex: 1 }
+
+.top { background: white; border-bottom: 1px solid #e4e6df }
+.top-inner { max-width: 1152px; margin: auto; padding: 14px 32px; display: flex; align-items: center; gap: 16px; font-size: 14px; flex-wrap: wrap }
+.top-inner b { font-size: 19px; letter-spacing: -.04em }
+.mark { width: 32px; height: 32px; display: grid; place-items: center; background: #245a43; color: white; border-radius: 8px; font: 24px Georgia, serif }
+.divider { height: 20px; border-left: 1px solid #e4e6df }
+.email { color: #57534e }
+
+main { max-width: 1152px; margin: 0 auto; padding: 40px 32px 100px }
+.hero { display: flex; align-items: end; gap: 16px }
+.hero-actions { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 12px }
+.eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #245a43; font-weight: 700 }
+h1 { font-size: clamp(27px, 4vw, 38px); letter-spacing: -.045em; font-weight: 650; margin: 8px 0 }
+.count { border: 1px solid #e4e6df; background: white; color: #78716c; font-size: 14px; padding: 2px 8px; border-radius: 6px; vertical-align: middle; letter-spacing: 0 }
+.hero p { font-size: 14px; margin: 8px 0 0 }
+.private { font-size: 12px; white-space: nowrap }
+.publish-button { background: #245a43; color: white; padding: 9px 18px; border-radius: 6px; font-size: 14px }
+.publish-button:hover, .publish-actions button:first-child:hover { background: #173a2c }
+.notice { display: flex; gap: 12px; align-items: center; margin-top: 28px; padding: 12px 16px; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; color: #78350f; font-size: 14px }
+.notice button { margin-left: auto; color: inherit; text-decoration: underline }
+.toolbar { display: flex; gap: 12px; align-items: center; margin: 24px 0 16px; font-size: 14px; flex-wrap: wrap }
+.toolbar > button { padding: 7px 10px; color: #78716c; border-radius: 6px }
+.toolbar > button[aria-pressed=true] { color: #173a2c; background: #eef4ef; border: 1px solid #dce9df }
+.toolbar small { color: #a8a29e; margin-left: 4px }
+.search { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: white; border: 1px solid #e4e6df; border-radius: 8px; width: min(100%, 420px) }
+.search:focus-within { border-color: #2f6b50 }
+.search input { flex: 1; min-width: 0; outline: 0; font-size: 14px }
+kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 4px }
+
+.inventory { border: 1px solid #e4e6df; border-radius: 12px; background: white; overflow: hidden }
+.project + .project { border-top: 1px solid #e4e6df }
+.project-head { background: #eef4ef80; padding: 12px 24px; display: flex; align-items: flex-start; gap: 12px }
+.project-head > svg { color: #78716c; flex: none; margin-top: 3px }
+.project-info { flex: 1; min-width: 0 }
+.project-name { display: flex; align-items: baseline; gap: 8px }
+.project-name h2 { font-size: 16px; font-weight: 650; margin: 0 }
+.project-name code { font-size: 12px; color: #78716c }
+.project-count { margin-left: auto; font-size: 12px; color: #78716c; white-space: nowrap }
+.project-description { font-size: 14px; color: #57534e }
+.project-description > .edit-description { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.project-description form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px }
+.project-description label { width: 100%; color: #57534e; font-size: 12px }
+.project-description input { flex: 1; min-width: 160px; padding: 6px; border: 1px solid #a8a29e; border-radius: 4px }
+.category { border-top: 1px solid #e4e6df; padding: 7px 24px 7px 56px; margin: 0; color: #78716c; font: 12px ui-monospace, monospace }
+.drop-target.active { outline: 2px solid #2f6b50; outline-offset: -3px; background: #dce9df }
+.drop-hint { margin-top: 12px; font-size: 12px; color: #78716c }
+
+.row { border-top: 1px solid #e4e6df }
+.row:hover { background: #f6f6f280 }
+.row-main { display: grid; grid-template-columns: 18px minmax(0, 1fr) 112px 88px 24px; align-items: start; gap: 20px; padding: 12px 24px 12px 56px }
+.category-group .row-main { padding-left: 80px }
+.kind { color: #78716c; padding-top: 1px }
+.row-content { min-width: 0 }
+.row-title { display: flex; align-items: baseline; gap: 8px; min-width: 0 }
+.row-toggle { color: #292524; text-align: left; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0 }
+.row-toggle:hover { color: #245a43; text-decoration: underline }
+.artifact-link { color: #78716c; font: 12px ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; max-width: 45%; text-decoration: underline; text-decoration-color: #d6d3d1; text-underline-offset: 3px }
+.copy-link { color: #78716c; flex: none; align-self: center; padding: 2px }
+.copy-link:hover, .chevron:hover { color: #245a43 }
+.copy-link svg { width: 14px; height: 14px }
+.summary { margin: 2px 0 0; color: #78716c; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.summary i { color: #a8a29e }
+.updated { color: #57534e; font-size: 14px; white-space: nowrap }
+.bytes { color: #78716c; text-align: right; font: 12px ui-monospace, monospace; white-space: nowrap }
+.chevron { color: #a8a29e }
+.chevron[aria-expanded=true] svg { transform: rotate(180deg) }
+.badge { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; padding: 2px 6px; border-radius: 5px; font-size: 11px; white-space: nowrap }
+
+.details { padding: 0 24px 20px 82px }
+.category-group .details { padding-left: 106px }
+.detail-copy { min-width: 0; font-size: 14px }
+.description { white-space: pre-wrap; overflow-wrap: anywhere }
+.edit-description { text-align: left; color: #57534e; padding: 4px 0; overflow-wrap: anywhere }
+.edit-description:hover { color: #245a43; text-decoration: underline }
+.description-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 }
+.description-form label, .description-form textarea { width: 100% }
+.description-form textarea { min-height: 80px; padding: 8px; border: 1px solid #a8a29e; border-radius: 4px; resize: vertical }
+.description-form button, .project-description form button, .delete-confirm button { padding: 5px 10px; border: 1px solid #d6d3d1; border-radius: 5px; background: white }
+.meta { color: #78716c; font-size: 12px; line-height: 1.9; margin: 8px 0 12px }
+.warning { color: #92400e; background: #fffbeb; padding: 10px; border-radius: 6px }
+.detail-copy > button:not(.edit-description) { padding: 5px 10px; border: 1px solid #e4e6df; border-radius: 5px; background: white; margin-right: 8px }
+.detail-copy > button.danger { border: 0; background: transparent }
+.danger { color: #991b1b }
+.delete-confirm { margin-top: 14px; padding: 12px; border: 1px solid #fecaca; border-radius: 6px; background: #fef2f2 }
+.delete-confirm p { margin: 0 0 8px; color: #991b1b }
+.delete-confirm button + button { margin-left: 8px }
+.mutation-error { color: #991b1b; font-size: 13px; overflow-wrap: anywhere }
+.mutation-error button { color: #991b1b; text-decoration: underline }
+.empty { padding: 18px 56px; color: #78716c; font-size: 14px }
+
+.publish-actions button:first-child { background: #245a43; color: white; padding: 9px 18px; border-radius: 6px }
+.publish-form { padding: 20px; margin: 12px 24px; border: 1px solid #dce9df; background: #eef4ef80; border-radius: 8px; display: grid; gap: 12px; font-size: 14px }
+.publish-form h3, .publish-form p { margin: 0 }
+.choose, .publish-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px }
+.choose label { display: grid; gap: 4px }
+.path-label { display: grid; gap: 5px }
+.path-label input, .path-label textarea { border: 1px solid #a8a29e; padding: 8px; border-radius: 5px; min-width: 0; width: 100% }
+.path-label textarea { min-height: 70px }
+.publish-actions button:last-child { padding: 9px }
+.publish-form progress { width: min(100%, 350px); accent-color: #245a43 }
+
+@media (max-width: 750px) {
+  main { padding: 32px 16px }
+  .top-inner { padding: 12px 16px }
+  .private, .email, .divider { display: none }
+  .hero { flex-wrap: wrap }
+  .row-main { grid-template-columns: 18px minmax(0, 1fr) 24px; gap: 10px; padding-left: 18px }
+  .category-group .row-main { padding-left: 32px }
+  .updated, .bytes { display: none }
+  .row-title { flex-wrap: wrap; gap: 4px 8px }
+  .artifact-link { max-width: 100% }
+  .details, .category-group .details { padding: 0 16px 16px 46px }
+  .category { padding-left: 32px }
+  .project-head { padding: 12px 16px }
+  .empty { padding: 16px }
+}

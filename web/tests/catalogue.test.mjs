@@ -10,6 +10,11 @@ test('recent Projects first, empty described Projects last, direct Artifacts bef
   assert.deepEqual(result[1].artifacts.map(a => a.path), ['older/z.html'])
   assert.deepEqual(result[1].categories.map(c => c.name), ['a'])
 })
+test('rows sort by latest update inside each Project and Category', () => {
+  const result = groups(projects, [...items, art('older/y.html', '2025-01-03'), art('older/a/c.html', '2025-01-04')], '', false)
+  assert.deepEqual(result[1].artifacts.map(a => a.path), ['older/y.html', 'older/z.html'])
+  assert.deepEqual(result[1].categories[0].artifacts.map(a => a.path), ['older/a/c.html', 'older/a/b/'])
+})
 test('Incomplete filter and search across Project, path, description and Publisher', () => {
   assert.deepEqual(groups(projects, items, '', true).map(g => g.project.name), ['older'])
   for (const q of ['older', 'a/b/', 'agent']) assert.ok(groups(projects, items, q, false).some(g => g.project.name === 'older'))

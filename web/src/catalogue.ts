@@ -16,8 +16,8 @@ export function groups(projects: Project[], artifacts: Artifact[], query: string
       if (!category) direct.push(item)
       else categories.set(category, [...(categories.get(category) || []), item])
     }
-    const byPath = (a: Artifact, b: Artifact) => a.path.localeCompare(b.path)
-    return { project, artifacts: direct.sort(byPath), categories: [...categories].sort(([a], [b]) => a.localeCompare(b)).map(([name, entries]) => ({ name, artifacts: entries.sort(byPath) })), all: items }
+    const byUpdated = (a: Artifact, b: Artifact) => b.updated_at.localeCompare(a.updated_at) || a.path.localeCompare(b.path)
+    return { project, artifacts: direct.sort(byUpdated), categories: [...categories].sort(([a], [b]) => a.localeCompare(b)).map(([name, entries]) => ({ name, artifacts: entries.sort(byUpdated) })), all: items }
   }).filter(g => g.all.length > 0 || (!incomplete && (!q || [g.project.name, g.project.description].some(v => v.toLocaleLowerCase().includes(q))) && g.project.description)).sort((a, b) => {
     if (!a.all.length) return b.all.length ? 1 : a.project.name.localeCompare(b.project.name)
     if (!b.all.length) return -1
