@@ -444,21 +444,15 @@ The Catalogue is the Portal SPA at `hub.bdgn.me/`, calling the API under `/ui/ap
   - An empty described Project shows "No Artifacts yet".
 - **Order**: Projects by most recent activity, with empty ones last.
 - **Categories**: sub-headings inside each Project. Artifacts directly under the Project come first.
-- **Compact row**:
-  - a kind icon (file or Bundle);
-  - the title, a direct link on the name (`auth-seam.html` / `roster-sync/`) and a copy-link button;
-  - an Incomplete badge when relevant;
-  - a one-line description beneath the title, not in a separate column;
-  - the updated date and the size.
+- **Artifact row**: title in larger, bold type; full public URL as a link on the next line; private description below it, including line breaks. Text shares one font family, and there is no accordion.
+  - An Incomplete badge and warning appear when relevant ([#17]).
 
-### 7.3 Expanded row
+### 7.3 Row actions
 
-Clicking the title or chevron expands the row. The public link and copy-link button remain visible in the compact row; there is no preview or repeated link.
-- The full description, click-to-edit, plain text up to 1,000 characters.
-- "Updated … by <Publisher>", the created time, the file count and the size.
-- For an incomplete Artifact, the note "The last publish or delete didn't finish. Readers may see mixed files or 404s. Publish again or delete to finish." ([#17]).
-- **Publish new version** opens the publish form in place, with the path fixed.
-- **Delete** asks for confirmation in the row: "Readers get 404 at once; there is no undo".
+Small Edit, Copy URL, Republish and Delete buttons sit in a block to the right of each Artifact (below the text on narrow screens).
+- Edit opens an inline description form, with plain text up to 1,000 characters.
+- Republish opens the publish form in place, with the path fixed.
+- Delete asks for confirmation in the row: "Readers get 404 at once; there is no undo".
 
 ### 7.4 Publishing from the browser
 

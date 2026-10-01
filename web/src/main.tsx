@@ -34,23 +34,8 @@ function MutationError({ failure, retry }: { failure: ApiFailure | null; retry: 
   return <p className="mutation-error" role="alert">{failure.code}: {failure.message}{(failure.code === 'busy' || failure.status === 503) && <> <button type="button" onClick={retry}>Retry</button></>}</p>
 }
 
-const date = (s: string) => new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-const shortDate = (s: string) => {
-  const d = new Date(s)
-  return d.toLocaleDateString(undefined, d.getFullYear() === new Date().getFullYear()
-    ? { day: 'numeric', month: 'short' }
-    : { day: 'numeric', month: 'short', year: 'numeric' })
-}
-
-function Icon({ kind }: { kind: 'folder' | 'file' | 'bundle' | 'chevron' | 'copy' }) {
-  const paths = {
-    folder: <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" />,
-    file: <path d="M7 3h7l5 5v13H7zM14 3v5h5" />,
-    bundle: <path d="M4 7l8-4 8 4-8 4zM4 7v10l8 4 8-4V7M12 11v10" />,
-    chevron: <path d="M6 9l6 6 6-6" />,
-    copy: <path d="M9 9h10v11H9zM5 15V4h10" />,
-  }
-  return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[kind]}</svg>
+function FolderIcon() {
+  return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" /></svg>
 }
 
 function ProjectHeader({ project, changed }: { project: Project; changed: (project: Project) => void }) {
@@ -72,7 +57,7 @@ function ProjectHeader({ project, changed }: { project: Project; changed: (proje
     } catch (error) { setFailure(failureOf(error)) }
     finally { setPending(false) }
   }
-  return <div className="project-head"><Icon kind="folder" /><div className="project-info"><div className="project-name"><h2>{project.name}</h2><code>/{project.name}/</code><span className="project-count">{project.artifact_count} {project.artifact_count === 1 ? 'Artifact' : 'Artifacts'}</span></div>
+  return <div className="project-head"><FolderIcon /><div className="project-info"><div className="project-name"><h2>{project.name}</h2><code>/{project.name}/</code><span className="project-count">{project.artifact_count} {project.artifact_count === 1 ? 'Artifact' : 'Artifacts'}</span></div>
     <div className="project-description">{editing ? <form onSubmit={e => { e.preventDefault(); void save() }}>
       <label htmlFor={`project-description-${project.name}`}>Project description</label>
       <input id={`project-description-${project.name}`} type="text" value={draft} disabled={pending} onChange={e => { if (Array.from(e.target.value).length <= 1000) { setDraft(e.target.value); setFailure(null) } }} />
@@ -83,7 +68,6 @@ function ProjectHeader({ project, changed }: { project: Project; changed: (proje
 }
 
 function Row({ artifact, base, changed, deleted, publish, form }: { artifact: Artifact; base: string; changed: (artifact: Artifact) => void; deleted: (path: string) => void; publish: () => void; form: React.ReactNode }) {
-  const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(artifact.description)
   const [confirming, setConfirming] = useState(false)
@@ -118,31 +102,27 @@ function Row({ artifact, base, changed, deleted, publish, form }: { artifact: Ar
   }
   return <div className="row">
     <div className="row-main">
-      <span className="kind"><Icon kind={artifact.path.endsWith('/') ? 'bundle' : 'file'} /></span>
-      <div className="row-content"><div className="row-title">
-        <button type="button" className="row-toggle" aria-expanded={open} aria-label={`Details for ${artifact.path}`} onClick={() => setOpen(!open)}>{artifact.title || name}</button>
-        {artifact.state === 'incomplete' && <span className="badge">Incomplete</span>}
-        <a className="artifact-link" href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${artifact.path} on the public host`}>{name}</a>
-        <button type="button" className="copy-link" aria-label={`Copy link for ${artifact.path}`} title="Copy link" onClick={() => void navigator.clipboard.writeText(url)}><Icon kind="copy" /></button>
-      </div>{!open && <div className="summary">{artifact.description || <i>No private description</i>}</div>}</div>
-      <span className="updated">{shortDate(artifact.updated_at)}</span><span className="bytes">{size(artifact.total_size)}</span>
-      <button type="button" className="chevron" aria-label={`Details for ${artifact.path}`} aria-expanded={open} onClick={() => setOpen(!open)}><Icon kind="chevron" /></button>
-    </div>
-    {open && <div className="details">
-      <div className="detail-copy">
+      <div className="row-content">
+        <div className="row-title"><strong>{artifact.title || name}</strong>{artifact.state === 'incomplete' && <span className="badge">Incomplete</span>}</div>
+        <a className="artifact-link" href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${artifact.path} on the public host`}>{url}</a>
         {editing ? <form className="description-form" onSubmit={e => { e.preventDefault(); void save() }}>
           <label htmlFor={`artifact-description-${artifact.path}`}>Artifact description</label>
           <textarea id={`artifact-description-${artifact.path}`} value={draft} disabled={pending} onChange={e => { if (Array.from(e.target.value).length <= 1000) { setDraft(e.target.value); setFailure(null) } }} />
           <span className="muted">{Array.from(draft).length}/1,000</span>
           <button type="submit" disabled={pending}>Save</button><button type="button" disabled={pending} onClick={() => { setDraft(artifact.description); setEditing(false); setFailure(null) }}>Cancel</button>
-        </form> : <button className="edit-description description" type="button" onClick={() => { setDraft(artifact.description); setEditing(true); setConfirming(false); setFailure(null) }} aria-label={`Edit description for ${artifact.path}`}>{artifact.description || 'No private description — click to add'}</button>}
-        <p className="meta">Updated {date(artifact.updated_at)} by {artifact.last_publisher}<br />Created {date(artifact.created_at)} · {artifact.file_count} {artifact.file_count === 1 ? 'file' : 'files'} · {size(artifact.total_size)}</p>
+        </form> : <p className="description">{artifact.description || <span className="muted">No private description</span>}</p>}
         {artifact.state === 'incomplete' && <p className="warning">The last publish or delete didn't finish. Readers may see mixed files or 404s. Publish again or delete to finish.</p>}
-        <button type="button" onClick={publish}>Publish new version</button>
-        {confirming ? <div className="delete-confirm"><p>Readers get 404 at once; there is no undo</p><button className="danger" type="button" disabled={pending} onClick={() => void remove()}>Confirm delete</button><button type="button" disabled={pending} onClick={() => { setConfirming(false); setFailure(null) }}>Cancel</button></div> : <button className="danger" type="button" disabled={pending} onClick={() => { setConfirming(true); setEditing(false); setFailure(null) }}>Delete Artifact</button>}
         <MutationError failure={failure} retry={() => void (confirming ? remove() : save())} />
       </div>
-    </div>}
+      <div className="row-actions">
+        {confirming ? <div className="delete-confirm"><p>Readers get 404 at once; there is no undo.</p><button className="danger" type="button" disabled={pending} onClick={() => void remove()}>Confirm delete</button><button type="button" disabled={pending} onClick={() => { setConfirming(false); setFailure(null) }}>Cancel</button></div> : <>
+          <button type="button" disabled={pending || editing} onClick={() => { setDraft(artifact.description); setEditing(true); setFailure(null) }} aria-label={`Edit description for ${artifact.path}`}>Edit</button>
+          <button type="button" onClick={() => void navigator.clipboard.writeText(url)} aria-label={`Copy link for ${artifact.path}`}>Copy URL</button>
+          <button type="button" onClick={publish} aria-label={`Publish new version of ${artifact.path}`}>Republish</button>
+          <button className="danger" type="button" disabled={pending} onClick={() => { setConfirming(true); setEditing(false); setDraft(artifact.description); setFailure(null) }} aria-label={`Delete ${artifact.path}`}>Delete</button>
+        </>}
+      </div>
+    </div>
     {form}
   </div>
 }
