@@ -500,6 +500,7 @@ From [#10]:
 
 ```
 pubhub publish <file|dir> <project>/<category…>/<name> [-d "description"] [--no-overwrite] [--dry-run] [--json]
+pubhub describe-project <project> <description>
 pubhub list [prefix] [--json]
 pubhub delete <path> [--yes]
 pubhub whoami
@@ -512,7 +513,7 @@ From [#10]:
 - The target is the stem, and the source decides the shape: a file becomes `<name>.html`, a directory becomes `<name>/`. An explicit `.html` or `/` is accepted if it matches the source.
 - `--no-overwrite` sends `If-None-Match: *`.
 - `--dry-run` validates locally and prints what would be uploaded (count, size, `<title>`, anything skipped) without calling the API.
-- There are no commands yet for editing descriptions or Project descriptions. The API's `PATCH` makes them easy to add later.
+- `describe-project` reads `GET /api/projects` and uses `PATCH /api/projects/<project>` only if that Project has no description. It skips Projects observed with a nonempty description; this check is not atomic with the PATCH. There is no CLI command yet for editing Artifact descriptions.
 
 ### 8.3 Credentials
 
@@ -527,7 +528,7 @@ From [#10]:
 
 From [#10]:
 
-- `publish` prints only the URL on success, or full API metadata with `--json`. `list` prints a table or full API metadata with `--json`; `delete` prints nothing on success.
+- `publish` prints only the URL on success, or full API metadata with `--json`. `list` prints a table or full API metadata with `--json`; `delete` and `describe-project` print nothing on success.
 - `whoami` prints the Publisher, CLI version and Portal version on separate labelled lines. If the Portal does not return `portal_version`, it prints `unknown`. `version` prints only the CLI version without credentials or a Portal request. Release binaries report their tag; other builds use Go module build information or `dev` with the short commit and optional `-dirty` suffix.
 - Progress, warnings and skipped files go to stderr.
 - Errors print as `error: <code>: <message>`, using the API's codes.
@@ -567,7 +568,8 @@ The skill is `skill/pubhub-publish/SKILL.md` in this repo, and the owner install
   - The naming rules apply, including the reserved names (§2.3).
 - It **always passes `--no-overwrite`** unless the user said to update an existing Artifact. On `exists` or a conflict, it asks the user.
 - It writes a one-line, private `-d` description saying what the page is and why it was made.
-- It returns the URL, noting that the page is public but unlisted.
+- After a successful publish, it summarizes the Project in one sentence using the root README, other docs, then source code, and runs `pubhub describe-project` to fill an empty Project description without replacing an existing one.
+- It returns the URL, noting that the page is public but unlisted; if the Project description fails, it reports the separate failure.
 - On an auth error, it points to `pubhub login` or the allowlist.
 
 ## 10. Deployment

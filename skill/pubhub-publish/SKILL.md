@@ -43,4 +43,14 @@ If publishing fails, use the CLI's `error: <code>: <message>` and exit status:
 | `5` | `busy` or HTTP `503` after the CLI's three retries. Report the failure rather than claiming publication. |
 | `1` | Other failure. Report the CLI error. |
 
-On success, return the printed URL and remind the user that it is **public but unlisted**.
+## Describe the Project
+
+After a successful publish, write a separate, one-sentence Project description. Use the same repository root chosen for the Project path, even if the Artifact came from a subdirectory:
+
+1. Read the root README (`README`, `README.md`, or another `README.*`) and summarize what the Project does.
+2. If it has no useful account of the Project, read other repository docs and summarize its purpose.
+3. If there are no useful docs, inspect source code such as entry points, manifests and core modules. If its purpose remains unclear, ask the user rather than guess.
+
+Keep the sentence factual, under 1,000 characters, and free of credentials or secrets. Then run `pubhub describe-project <project> "<one-sentence project description>"`. This command checks the Catalogue and skips Projects that already have a description. `-d` is the Artifact description and must stay about the Artifact. If the CLI lacks `describe-project`, or setting the Project description fails, say so; a successful Artifact publish is still a success, but the Project description was not set.
+
+Return the printed URL and remind the user that it is **public but unlisted**.

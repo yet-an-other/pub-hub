@@ -41,11 +41,13 @@ func main() {
 func (c *cli) run(args []string) int {
 	var err error
 	if len(args) == 0 {
-		err = local("usage", "expected publish, list, delete, whoami, version or login")
+		err = local("usage", "expected publish, describe-project, list, delete, whoami, version or login")
 	} else {
 		switch args[0] {
 		case "publish":
 			err = c.publish(args[1:])
+		case "describe-project":
+			err = c.describeProject(args[1:])
 		case "list":
 			err = c.list(args[1:])
 		case "delete":
