@@ -5,22 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"log/slog"
-	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/yet-an-other/pub-hub/internal/auth"
 	"github.com/yet-an-other/pub-hub/internal/buildversion"
 	"github.com/yet-an-other/pub-hub/internal/naming"
-	htmltokenizer "golang.org/x/net/html"
 )
 
 const (
@@ -410,44 +406,7 @@ func (a *application) publishArtifact(w http.ResponseWriter, r *http.Request, pa
 	}
 	defer mutation.release()
 
-	started := time.Now()
-	if path.Kind == naming.Bundle {
-		a.publishBundle(w, r, mutation, publisher.Label, started)
-		return
-	}
-	var description *string
-	file, size, err := a.spoolSingleFile(w, r, &description)
-	if err != nil {
-		writeUploadError(w, err)
-		return
-	}
-	defer func() {
-		name := file.Name()
-		_ = file.Close()
-		_ = os.Remove(name)
-	}()
-
-	title := extractTitle(file, path.Name)
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		auth.WriteError(w, http.StatusInternalServerError, "internal_error", "could not read spooled upload")
-		return
-	}
-
-	view, exists, err := mutation.publish(r.Context(), artifactPublish{
-		title: title, description: description, publisher: publisher.Label,
-		updatedAt: a.now().UTC(), createOnly: r.Header.Get("If-None-Match") == "*",
-		single: file, size: size,
-	})
-	if err != nil {
-		a.writePublishError(w, err, path, publisher.Label)
-		return
-	}
-	a.log.Info("artifact published", "path", view.Path, "publisher", publisher.Label, "file_count", view.FileCount, "bytes", view.TotalSize, "duration_ms", time.Since(started).Milliseconds())
-	status := http.StatusOK
-	if !exists {
-		status = http.StatusCreated
-	}
-	writeJSON(w, status, view)
+	a.publishStaged(w, r, mutation, publisher.Label, time.Now())
 }
 
 func (a *application) writePublishError(w http.ResponseWriter, err error, path naming.ArtifactPath, publisher string) {
@@ -498,169 +457,4 @@ func writeNameError(w http.ResponseWriter, err error) {
 		return
 	}
 	auth.WriteError(w, http.StatusBadRequest, "name_invalid", "Artifact path is invalid")
-}
-
-func writeUploadError(w http.ResponseWriter, err error) {
-	var maxBytesErr *http.MaxBytesError
-	switch {
-	case errors.As(err, &maxBytesErr):
-		auth.WriteError(w, http.StatusRequestEntityTooLarge, "too_large", "Publish request exceeds 100 MB")
-	case errors.Is(err, errTooLarge):
-		auth.WriteError(w, http.StatusRequestEntityTooLarge, "too_large", "Publish request exceeds 100 MB")
-	case errors.Is(err, errTooManyFiles):
-		auth.WriteError(w, http.StatusRequestEntityTooLarge, "too_many_files", "Bundle exceeds 2,000 files")
-	case errors.Is(err, errPathInvalid):
-		auth.WriteError(w, http.StatusBadRequest, "path_invalid", "Invalid Bundle file path")
-	case errors.Is(err, errIndexMissing):
-		auth.WriteError(w, http.StatusUnprocessableEntity, "index_missing", "Bundle requires index.html")
-	case errors.Is(err, errFileCount):
-		auth.WriteError(w, http.StatusUnprocessableEntity, "file_count", "Single-file Artifacts require exactly one file")
-	case errors.Is(err, errSpoolFailure):
-		auth.WriteError(w, http.StatusInternalServerError, "internal_error", "Could not spool the upload")
-	default:
-		auth.WriteError(w, http.StatusBadRequest, "request_invalid", "Malformed publish request")
-	}
-}
-
-var (
-	errTooLarge     = errors.New("publish request too large")
-	errFileCount    = errors.New("single-file publish requires exactly one file")
-	errSpoolFailure = errors.New("upload spool failed")
-	errTooManyFiles = errors.New("too many Bundle files")
-	errPathInvalid  = errors.New("invalid Bundle path")
-	errIndexMissing = errors.New("Bundle index missing")
-)
-
-func validDescription(value string) bool {
-	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= 1000
-}
-
-func validDescriptionBytes(value []byte) bool {
-	return len(value) <= 4000 && validDescription(string(value))
-}
-
-func (a *application) spoolSingleFile(w http.ResponseWriter, r *http.Request, description **string) (*os.File, int64, error) {
-	if r.ContentLength > maxPublishBytes {
-		return nil, 0, errTooLarge
-	}
-	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || mediaType != "multipart/form-data" {
-		return nil, 0, errors.New("request must be multipart/form-data")
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxPublishBytes)
-	reader, err := r.MultipartReader()
-	if err != nil {
-		return nil, 0, fmt.Errorf("read multipart request: %w", err)
-	}
-	var file *os.File
-	var size int64
-	files := 0
-	unexpectedField := false
-	for {
-		part, err := reader.NextPart()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			if file != nil {
-				_ = file.Close()
-				_ = os.Remove(file.Name())
-			}
-			return nil, 0, fmt.Errorf("read multipart part: %w", err)
-		}
-		if part.FileName() == "" {
-			body, readErr := io.ReadAll(io.LimitReader(part, 4001))
-			_ = part.Close()
-			if readErr != nil {
-				if file != nil {
-					_ = file.Close()
-					_ = os.Remove(file.Name())
-				}
-				return nil, 0, fmt.Errorf("read multipart field: %w", readErr)
-			}
-			if part.FormName() != "description" || *description != nil || !validDescriptionBytes(body) {
-				unexpectedField = true
-			} else {
-				value := string(body)
-				*description = &value
-			}
-			continue
-		}
-		files++
-		if files > 1 {
-			_ = part.Close()
-			if file != nil {
-				_ = file.Close()
-				_ = os.Remove(file.Name())
-			}
-			return nil, 0, errFileCount
-		}
-		file, err = os.CreateTemp(a.spoolDir, "publish-*")
-		if err != nil {
-			_ = part.Close()
-			return nil, 0, fmt.Errorf("%w: create upload spool file: %v", errSpoolFailure, err)
-		}
-		size, err = io.Copy(file, part)
-		closePartErr := part.Close()
-		if err == nil {
-			err = closePartErr
-		}
-		if err != nil {
-			_ = file.Close()
-			_ = os.Remove(file.Name())
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
-				return nil, 0, fmt.Errorf("spool upload: %w", err)
-			}
-			return nil, 0, fmt.Errorf("%w: spool upload: %v", errSpoolFailure, err)
-		}
-	}
-	if files != 1 {
-		if file != nil {
-			_ = file.Close()
-			_ = os.Remove(file.Name())
-		}
-		return nil, 0, errFileCount
-	}
-	if unexpectedField {
-		_ = file.Close()
-		_ = os.Remove(file.Name())
-		return nil, 0, errors.New("unexpected multipart field")
-	}
-	return file, size, nil
-}
-
-func extractTitle(file *os.File, fallback string) string {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return fallback
-	}
-	tokenizer := htmltokenizer.NewTokenizer(file)
-	var title strings.Builder
-	inTitle := false
-	for {
-		tokenType := tokenizer.Next()
-		switch tokenType {
-		case htmltokenizer.StartTagToken:
-			token := tokenizer.Token()
-			if strings.EqualFold(token.Data, "title") {
-				inTitle = true
-			}
-		case htmltokenizer.TextToken:
-			if inTitle {
-				title.Write(tokenizer.Text())
-				title.WriteByte(' ')
-			}
-		case htmltokenizer.EndTagToken:
-			token := tokenizer.Token()
-			if strings.EqualFold(token.Data, "title") && inTitle {
-				value := strings.Join(strings.Fields(html.UnescapeString(title.String())), " ")
-				if value != "" {
-					return value
-				}
-				return fallback
-			}
-		case htmltokenizer.ErrorToken:
-			return fallback
-		}
-	}
 }
