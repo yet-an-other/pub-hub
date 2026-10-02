@@ -184,7 +184,7 @@ Paths from [ADR 0004] and [#7], plus the health endpoints from [#15]:
 | `/api/…` | Portal, the machine Publisher API | Bearer only, no `auth_request`. nginx sets the identity headers to empty, and the Portal ignores cookies |
 | `/ui/api/…` | Portal, the SPA's API | `auth_request` with the cookie, then the Portal's administrator-role check. A missing session gets a JSON `401`, and the SPA reloads |
 | `/healthz`, `/readyz` | Portal, health | None (still LAN/VPN-only) |
-| `/` (everything else) | Portal: SPA shell, assets, client routes | `auth_request`, then the Portal's administrator-role check. A missing session gets a `302` to `/oauth2/sign_in` |
+| `/` (everything else) | Portal: SPA shell, assets, client routes | `auth_request`, then the Portal's administrator-role check. A missing session gets a `302` to `/oauth2/start`, bypassing the oauth2-proxy login page |
 
 The same Go handlers are mounted under `/api/` and `/ui/api/`, and only the authentication middleware differs, so there is one API (§6). Two prefixes exist because nginx `auth_request` cannot accept "cookie or bearer" on one path ([ADR 0004]).
 
