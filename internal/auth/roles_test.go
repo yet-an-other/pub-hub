@@ -11,7 +11,7 @@ import (
 )
 
 // Exercise the public bearer middleware with claim bodies Zitadel can return.
-func TestRequireOnlyTrustsTheExactProjectOrganizationRole(t *testing.T) {
+func TestRequireOnlyTrustsTheExactProjectRole(t *testing.T) {
 	const grant = `"urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"}}`
 	cases := []struct {
 		name, claims string
@@ -19,11 +19,13 @@ func TestRequireOnlyTrustsTheExactProjectOrganizationRole(t *testing.T) {
 	}{
 		{"exact grant", grant, http.StatusNoContent},
 		{"another project", `"urn:zitadel:iam:org:project:other:roles":{"publisher":{"org-456":"example.test"}}`, http.StatusForbidden},
-		{"another organization", `"urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"other":"example.test"}}`, http.StatusForbidden},
+		{"another organization", `"urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"other":"example.test"}}`, http.StatusNoContent},
+		{"admin only", `"urn:zitadel:iam:org:project:project-123:roles":{"hub-admin":{"org-456":"example.test"}}`, http.StatusForbidden},
 		{"unqualified role", `"urn:zitadel:iam:org:project:roles":{"publisher":{"org-456":"example.test"}}`, http.StatusForbidden},
 		{"scope and audience", `"scope":"openid urn:zitadel:iam:org:project:project-123:roles:publisher","aud":["project-123"]`, http.StatusForbidden},
 		{"no role", `"name":"Test Account"`, http.StatusForbidden},
 		{"missing organization leaf", `"urn:zitadel:iam:org:project:project-123:roles":{"publisher":{}}`, http.StatusForbidden},
+		{"empty organization key", `"urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"":"example.test"}}`, http.StatusForbidden},
 		{"wrong leaf type", `"urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":true}}`, http.StatusForbidden},
 		{"empty domain", `"urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":""}}`, http.StatusForbidden},
 		{"malformed roles", `"urn:zitadel:iam:org:project:project-123:roles":["publisher"]`, http.StatusForbidden},

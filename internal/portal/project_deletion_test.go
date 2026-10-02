@@ -240,7 +240,7 @@ func TestDeleteProjectSupportsBothAPIAuthenticationPrefixesAndValidation(t *test
 		if prefix == "/api" {
 			request.Header.Set("Authorization", "Bearer test-pat")
 		} else {
-			request.Header.Set("X-Auth-Request-Email", "owner@example.test")
+			setBrowserSession(request, "owner@example.test")
 			request.Header.Set("Origin", "https://hub.bdgn.me")
 			request.Header.Set("Sec-Fetch-Site", "same-origin")
 		}

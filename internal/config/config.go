@@ -25,13 +25,11 @@ type Config struct {
 	// Portal when it introspects PATs. Its secret arrives through
 	// systemd's LoadCredential=.
 	HubAPIClientID string `toml:"hub_api_client_id"`
-	// These IDs and role key pin the exact Zitadel assignment trusted for
-	// machine Publishers. They are not account-specific.
-	ZitadelProjectID          string `toml:"zitadel_project_id"`
-	ZitadelAuthorizationOrgID string `toml:"zitadel_authorization_org_id"`
-	ZitadelPublisherRole      string `toml:"zitadel_publisher_role"`
-	// OwnerEmail is the only browser identity admitted under /ui/api/.
-	OwnerEmail string `toml:"owner_email"`
+	// Project ID and role keys pin the Zitadel assignments trusted for Portal
+	// administrators and machine Publishers. They are not account-specific.
+	ZitadelProjectID     string `toml:"zitadel_project_id"`
+	ZitadelAdminRole     string `toml:"zitadel_admin_role"`
+	ZitadelPublisherRole string `toml:"zitadel_publisher_role"`
 
 	// S3Endpoint is the RGW endpoint. Credentials arrive through
 	// systemd's LoadCredential=.
@@ -55,7 +53,13 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read config %s: %w", path, err)
 	}
 	if md.IsDefined("publishers") {
-		return Config{}, fmt.Errorf("config %s: remove [publishers]; grant the publisher role in Zitadel and configure zitadel_project_id and zitadel_authorization_org_id", path)
+		return Config{}, fmt.Errorf("config %s: remove [publishers]; grant the publisher role in the configured Zitadel project", path)
+	}
+	if md.IsDefined("owner_email") {
+		return Config{}, fmt.Errorf("config %s: remove owner_email; grant the hub-admin role in the configured Zitadel project", path)
+	}
+	if md.IsDefined("zitadel_authorization_org_id") {
+		return Config{}, fmt.Errorf("config %s: remove zitadel_authorization_org_id; role grants in any organization of the configured Zitadel project count", path)
 	}
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
 		keys := make([]string, len(undecoded))
@@ -66,6 +70,9 @@ func Load(path string) (Config, error) {
 	}
 	if !md.IsDefined("zitadel_publisher_role") {
 		cfg.ZitadelPublisherRole = "publisher"
+	}
+	if !md.IsDefined("zitadel_admin_role") {
+		cfg.ZitadelAdminRole = "hub-admin"
 	}
 	if cfg.SpoolDirectory == "" {
 		cfg.SpoolDirectory = "/var/cache/pubhub/spool"
@@ -88,18 +95,17 @@ func (c Config) validate() error {
 		return errors.New("hub API client id is required")
 	case strings.TrimSpace(c.ZitadelProjectID) != c.ZitadelProjectID || c.ZitadelProjectID == "":
 		return errors.New("valid Zitadel project id is required")
-	case strings.TrimSpace(c.ZitadelAuthorizationOrgID) != c.ZitadelAuthorizationOrgID || c.ZitadelAuthorizationOrgID == "":
-		return errors.New("valid Zitadel authorization organization id is required")
 	case strings.TrimSpace(c.ZitadelPublisherRole) != c.ZitadelPublisherRole || c.ZitadelPublisherRole == "":
 		return errors.New("valid Zitadel publisher role is required")
+	case strings.TrimSpace(c.ZitadelAdminRole) != c.ZitadelAdminRole || c.ZitadelAdminRole == "":
+		return errors.New("valid Zitadel admin role is required")
+	case c.ZitadelAdminRole == c.ZitadelPublisherRole:
+		return errors.New("Zitadel admin and publisher roles must be different")
 	}
 
 	issuer, err := url.Parse(c.ZitadelIssuerURL)
 	if err != nil || issuer.Scheme == "" || issuer.Host == "" {
 		return fmt.Errorf("zitadel issuer URL must be an absolute URL, got %q", c.ZitadelIssuerURL)
-	}
-	if c.OwnerEmail == "" || strings.TrimSpace(c.OwnerEmail) != c.OwnerEmail || strings.ContainsAny(c.OwnerEmail, " \t\r\n") || !strings.Contains(c.OwnerEmail, "@") {
-		return errors.New("valid owner email is required")
 	}
 	if c.S3Endpoint == "" || c.ArtifactBucket == "" || c.MetadataBucket == "" || c.PublicBaseURL == "" {
 		return errors.New("s3 endpoint, artifact bucket, metadata bucket, and public base URL are required")

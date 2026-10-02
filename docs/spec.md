@@ -8,7 +8,7 @@ pub-hub is a minimal, single-tenant hub for publishing short-lived static HTML p
 
 **Fixed constraints** ([#1]):
 
-- Single tenant: the owner and their agents publish. Readers are anonymous.
+- Single tenant: Portal administrators and their agents publish. Readers are anonymous.
 - Home server, no Docker. The Go Portal, oauth2-proxy and (later) `cloudflared` run directly under systemd.
 - Manually configured nginx terminates TLS.
 - Storage goes through the generic S3 API only: Ceph RGW sits behind it, but no RGW-specific features are used.
@@ -120,7 +120,7 @@ The segment rule does not apply to files inside a Bundle ([#5]). They follow the
 
 ### 3.1 Threat and invariant
 
-Artifacts are arbitrary HTML and JS. They come from the owner and their agents, but they are treated as untrusted: nothing an Artifact's script does may act with the owner's Portal session ([#2]).
+Artifacts are arbitrary HTML and JS. They come from the owner and their agents, but they are treated as untrusted: nothing an Artifact's script does may act with a Portal administrator's session ([#2]).
 
 **Invariant: Artifact bytes are only ever served from the Artifact host** ([#2], [ADR 0002]).
 
@@ -182,23 +182,20 @@ Paths from [ADR 0004] and [#7], plus the health endpoints from [#15]:
 |---|---|---|
 | `/oauth2/…` | oauth2-proxy: sign-in, callback, sign-out | `/oauth2/auth` is `internal` |
 | `/api/…` | Portal, the machine Publisher API | Bearer only, no `auth_request`. nginx sets the identity headers to empty, and the Portal ignores cookies |
-| `/ui/api/…` | Portal, the SPA's API | `auth_request` with the cookie. A missing session gets a JSON `401`, and the SPA reloads |
+| `/ui/api/…` | Portal, the SPA's API | `auth_request` with the cookie, then the Portal's administrator-role check. A missing session gets a JSON `401`, and the SPA reloads |
 | `/healthz`, `/readyz` | Portal, health | None (still LAN/VPN-only) |
-| `/` (everything else) | Portal: SPA shell, assets, client routes | `auth_request`. A missing session gets a `302` to `/oauth2/sign_in` |
+| `/` (everything else) | Portal: SPA shell, assets, client routes | `auth_request`, then the Portal's administrator-role check. A missing session gets a `302` to `/oauth2/sign_in` |
 
 The same Go handlers are mounted under `/api/` and `/ui/api/`, and only the authentication middleware differs, so there is one API (§6). Two prefixes exist because nginx `auth_request` cannot accept "cookie or bearer" on one path ([ADR 0004]).
 
-### 4.2 Browser sign-in (the owner)
+### 4.2 Browser sign-in (Portal administrators)
 
-- oauth2-proxy runs as an `auth_request` sidecar, not as a reverse proxy, so uploads never pass through it ([#3], [#7]).
-  - Version at least v7.15.2, since earlier versions have critical auth bypasses ([#3]).
-- `provider = "oidc"` against the Zitadel web app `hub-browser`: code flow, Basic auth, PKCE S256 ([#3], [#14]).
-- The cookie has a `__Host-` name, `SameSite=Lax` and `session_cookie_minimal`, with a fixed 12 h `cookie_expire` and no refresh ([#7]).
-- The owner is checked three times ([#7]):
-  1. Zitadel: the `pub-hub` project has "Check Role Assignment on Authentication", and only the owner holds the `owner` role.
-  2. oauth2-proxy: `authenticated_emails_file` lists only the owner. Avoid Zitadel's example settings `email_domains = ["*"]` and `user_id_claim = "sub"` ([#3]).
-  3. The Portal: `X-Auth-Request-Email` must equal the configured owner email.
-- nginx sets `X-Auth-Request-User` and `X-Auth-Request-Email` in every Portal location, either to the `auth_request` values or to empty, so a client can never supply them ([#7]).
+- oauth2-proxy runs as an `auth_request` sidecar, not as a reverse proxy, so uploads never pass through it ([#3], [#7]). Use v7.15.2 or later ([#3]).
+- `provider = "oidc"` against the Zitadel web app `hub-browser`: code flow, Basic auth, PKCE S256, and `offline_access` for refresh tokens ([#3], [#14], [ADR 0005]).
+- The encrypted, signed cookie has a `__Host-` name and `SameSite=Lax`. It retains access and refresh tokens in a cookie with a sliding 12 h expiry and `cookie_refresh` enabled. nginx relays refresh and split-cookie headers from the auth subrequest ([ADR 0005]).
+- oauth2-proxy allows any authenticated email from the configured issuer, uses `sub` for `X-Auth-Request-User`, and forwards the access token to nginx. These are identity and credential transport, not authorization. There is no owner-email file or per-person Portal config ([ADR 0005]).
+- The Portal introspects the forwarded browser token with `hub-api` and requires an active token, a subject matching `X-Auth-Request-User`, and the configured `hub-admin` role in the configured project. Any authorization organization can hold the grant; `publisher` does not imply browser access. The forwarded email is only the browser Publisher label ([ADR 0005]).
+- nginx sets `X-Auth-Request-User`, `X-Auth-Request-Email` and `X-Auth-Request-Access-Token` in every Portal location, from the `auth_request` values on browser paths or to empty elsewhere. A client cannot supply them directly ([ADR 0005]).
 - Sign-out is `/oauth2/sign_out` ([#9]). [r-auth] §2.2 shows how to end the Zitadel session too, since a minimal session cookie keeps no ID token.
 
 ### 4.3 Machine Publishers
@@ -211,7 +208,7 @@ From [ADR 0004], [#7] and [#35]:
 - **Clients** send `Authorization: Bearer <PAT>` to `https://hub.bdgn.me/api/…` and never talk to Zitadel.
 - **The Portal:**
   - It introspects each PAT through its own Zitadel API app, `hub-api`, which must belong to the configured project. It caches authorization and identity for at most 60 s, keyed by the token's hash.
-  - It requires `active: true`, nonempty `sub`, and the configured `publisher` role under exactly `urn:zitadel:iam:org:project:<configured-project-id>:roles`, with the configured authorization organization ID as the role's key. The role's leaf value is an organization domain, not the authorization organization ID. An active PAT alone, scope, audience, unqualified role claim or matching role in another project or authorization organization cannot grant access ([#35]).
+  - It requires `active: true`, nonempty `sub`, and the configured `publisher` role under exactly `urn:zitadel:iam:org:project:<configured-project-id>:roles`. A nonempty grant in any authorization organization counts. The role's leaf value is an organization domain. An active PAT alone, scope, audience, unqualified role claim or matching role in another project cannot grant access ([#35], [ADR 0005]).
   - Grant or remove the role in Zitadel without changing Portal config or restarting. Effective changes depend on Zitadel propagation plus the Portal cache; removal is not guaranteed within 60 s. After cache expiry, an unavailable Zitadel yields `503` rather than stale admission.
 - **Rejected** ([ADR 0004]):
   - Portal-minted API keys.
@@ -223,16 +220,19 @@ From [ADR 0004], [#7] and [#35]:
 | Situation | Answer |
 |---|---|
 | Missing or invalid token | `401 unauthenticated` |
-| Active PAT without the role in the configured project and authorization organization | `403 forbidden` |
+| Active PAT without the role in the configured project | `403 forbidden` |
+| Browser session with no `hub-admin` grant in the configured project | `403 forbidden` |
+| Browser token missing, inactive or with a subject different from the session | `401 unauthenticated` |
 | Zitadel unreachable during introspection (transport failure) | `503 idp_unavailable`, retryable. Unexpired cached results work for at most 60 s; expired entries are never extended during an outage |
 | Browser session missing or expired | `/ui/api/`: JSON `401`, and the SPA reloads. `/`: `302` to sign-in |
+| Zitadel unreachable when a browser role recheck is due | `503 idp_unavailable`. If oauth2-proxy cannot refresh the token first, it may instead treat the session as expired |
 
-Existing browser sessions last until they expire, even while Zitadel is down ([#7], [#8]).
+Browser authorization and identity are cached for at most 60 s, or until the access token expires if sooner. Active tokens without a usable expiry claim are re-introspected on every request. Grant removal takes Zitadel propagation plus at most the cache interval; once the cache expires, an outage cannot preserve access ([ADR 0005]).
 
 ### 4.5 Authorisation and identity
 
 - Every authenticated Publisher has full rights: publish, replace, delete and edit descriptions, anywhere. There are no per-credential scopes ([ADR 0004], [#7]).
-- The **Publisher label**, recorded as "last Publisher", is introspection's current `name` for a machine Publisher, falling back to `preferred_username` and then stable `sub`; for a publish from the Catalogue it is the owner's email ([#7], [#35]). New publishes take the name after cache refresh. Existing `last_publisher` strings stay unchanged after an account rename.
+- The **Publisher label**, recorded as "last Publisher", is introspection's current `name` for a machine Publisher, falling back to `preferred_username` and then stable `sub`; for a publish from the Catalogue it is that Portal administrator's signed-in email ([#7], [#35], [ADR 0005]). New publishes take the name after cache refresh. Existing `last_publisher` strings stay unchanged after an account rename.
 - `GET /api/whoami` returns the caller's label and Portal version ([#8]).
 
 ## 5. Storage and serving
@@ -436,7 +436,7 @@ The Catalogue is the Portal SPA at `hub.bdgn.me/`, calling the API under `/ui/ap
 
 ### 7.1 Page
 
-- A top bar with the pub-hub mark, "Private Catalogue", the total size and Artifact count, the owner's email, and Sign out (`/oauth2/sign_out`).
+- A top bar with the pub-hub mark, "Private Catalogue", the total size and Artifact count, the signed-in administrator's email, and Sign out (`/oauth2/sign_out`).
 - A heading "Published Artifacts" with the count, a **Publish** button, and the note "Descriptions are private".
 - An incomplete banner when any Artifact is `incomplete`. Its "Show" link switches the filter to Incomplete.
 - Search with a `/` shortcut, covering Projects, paths, titles, descriptions and Publishers, plus **All / Incomplete** filter buttons.
@@ -476,7 +476,7 @@ Small Edit, Republish and Delete buttons sit in a vertical line to the right of 
 
 ### 7.5 Session
 
-- A `401` from `/ui/api/` means the 12 h session has expired, and the SPA reloads to go through sign-in ([#7]).
+- A `401` from `/ui/api/` means the browser session or access token is unusable; the SPA reloads to go through sign-in ([#7], [ADR 0005]).
 - State-changing calls are same-origin, so they pass `http.CrossOriginProtection` ([#7]).
 
 The Catalogue has no move or rename, no multi-Project bulk actions, no alternative sort orders and no activity feed ([#9], [#15]).
@@ -566,7 +566,7 @@ The skill is `skill/pubhub-publish/SKILL.md` in this repo, and the owner install
 - It writes a one-line, private `-d` description saying what the page is and why it was made.
 - After a successful publish, it summarizes the Project in one sentence using the root README, other docs, then source code, and runs `pubhub describe-project` to fill an empty Project description without replacing an existing one.
 - It returns the URL, noting that the page is public but unlisted; if the Project description fails, it reports the separate failure.
-- On an auth error, it points to `pubhub login` for missing or expired PATs, or to the machine account's role grant in the configured Zitadel project and authorization organization for `403`.
+- On an auth error, it points to `pubhub login` for missing or expired PATs, or to the machine account's role grant in the configured Zitadel project for `403`.
 
 ## 10. Deployment
 
@@ -591,15 +591,14 @@ oauth2-proxy always trusts forwarded headers from unix-socket peers, so the sock
 ### 10.2 Config and secrets
 
 - **`/etc/pubhub/portal.toml`** holds the Portal's non-secret config ([#14]):
-  - the owner email;
   - the bucket names and the RGW endpoint;
   - the `pub.` base URL;
-  - the trusted Zitadel project ID, authorization organization ID and `publisher` role key, not per-user accounts or labels. Obsolete `[publishers]` tables fail startup with a migration error ([#35]).
+  - the trusted Zitadel project ID and optional role keys, defaulting to `publisher` and `hub-admin`. Obsolete `[publishers]`, `owner_email` and `zitadel_authorization_org_id` settings fail startup with a migration error ([ADR 0005]).
 - **Portal secrets** arrive via `LoadCredential=` from root-only files in `/etc/pubhub/credentials/` ([#14]):
   - the RGW keys of user `pub-hub`;
   - the `hub-api` client secret.
 - **oauth2-proxy secrets**, the client secret and the cookie secret, also arrive via `LoadCredential` ([#3], [#14]). The cookie secret is raw 16, 24 or 32 bytes with no trailing newline ([#3]).
-- `authenticated_emails_file` holds only the owner ([#14]).
+- oauth2-proxy has no email allowlist; the Portal's project-qualified `hub-admin` check grants access ([ADR 0005]).
 - Every party uses the same canonical Zitadel hostname, because Zitadel derives the issuer from the `Host` header ([#3]).
 
 ### 10.3 nginx `hub.bdgn.me`
@@ -607,10 +606,10 @@ oauth2-proxy always trusts forwarded headers from unix-socket peers, so the sock
 - Internal DNS only, with no public record. nginx `allow`s the LAN and VPN ranges, then `deny all` ([#14]).
 - Locations as in §4.1.
   - `/oauth2/auth` is `internal`, with the request body off and `X-Forwarded-Uri` forced. This is the GHSA-7x63 mitigation ([#3]).
-- Every location that proxies to the Portal forwards `Host $host` and sets `X-Auth-Request-User`/`-Email` exactly once, to the `auth_request` values or to empty ([#2], [#7]).
+- Every location that proxies to the Portal forwards `Host $host` and overwrites `X-Auth-Request-User`, `-Email` and `-Access-Token` from the auth subrequest or with empty values ([#2], [ADR 0005]). Refreshed session cookies and both split-cookie parts reach the browser without dropping the security response headers.
 - `client_max_body_size` sits slightly above 100 MB on `/api/` and `/ui/api/` ([#8]).
 - The response headers from §3.2 go on every response.
-- Before go-live, send a forged `X-Auth-Request-Email` and confirm it never reaches the Portal on any location ([r-auth] §6).
+- The nginx integration test sends forged identity and access-token headers and confirms none reaches the Portal; it checks cookie refresh propagation and response hardening headers.
 
 ### 10.4 nginx `pub.bdgn.me`
 
@@ -647,10 +646,10 @@ From [#12] and [#14]. The plain commands go in `docs/deploy.md`.
 
 From [#3], [#7] and [#14]:
 
-- A `pub-hub` project with "Check Role Assignment on Authentication", and the `owner` role granted to the owner.
+- A `pub-hub` project with "Check Role Assignment on Authentication"; grant Portal administrators `hub-admin` in this project. The Portal checks that specific role, not just whether the person has some project role ([ADR 0005]).
 - Web app `hub-browser`: code flow, Basic auth, PKCE S256, callback `https://hub.bdgn.me/oauth2/callback`.
 - API app `hub-api`, for the Portal's introspection.
-- One service account per agent host, each with a one-year PAT. Grant the `publisher` role in the configured project and authorization organization before upgrading from the allowlist-based Portal. Verify that `hub-api` is an app in that project. Remove `[publishers]` from config before starting the new version. Assignments and names then change in Zitadel without a Portal restart ([#35]).
+- One service account per agent host, each with a one-year PAT. Grant `publisher` in the configured project before upgrading. Remove obsolete organization and owner-email settings, the oauth2-proxy owner-email file gate, and any `[publishers]` table. Assignments and names then change in Zitadel without a Portal restart ([#35], [ADR 0005]).
 
 ## 11. Public exposure through Cloudflare Tunnel
 
@@ -747,7 +746,7 @@ Where a source was loose, the spec reads it as follows. The owner can overrule a
 3. The field name of a single-file publish's one file part carries no meaning. The object key is the Artifact path.
 4. `pubhub delete <path>` takes the Artifact path with its suffix, as `pubhub list` prints it and as the API requires.
 5. A single-file source must be an `.html` file, since a single-file Artifact is one ([CONTEXT.md]). Anything else is a local validation error (exit `2`).
-6. `portal.toml` also needs the Zitadel issuer URL and the `hub-api` client id for introspection. [#14] lists the other fields; [#35] replaces the allowlist with project ID, authorization organization ID and role key.
+6. `portal.toml` also needs the Zitadel issuer URL and the `hub-api` client id for introspection. [#14] lists the other fields; [#35] replaced the machine allowlist, and [ADR 0005] removes the authorization organization ID and owner email in favor of project-qualified roles.
 7. `/healthz` and `/readyz` are exact locations on `hub.` alongside the [ADR 0004] table ([#15]).
 8. A Project's "most recent activity" is the latest `updated at` among its Artifacts.
 
@@ -796,6 +795,7 @@ No ticket on the map is open.
 - [ADR 0002] Artifacts on a sibling host, not the Portal's host or a separate domain
 - [ADR 0003] Artifact metadata as JSON records in a private S3 bucket, held in memory
 - [ADR 0004] Machine Publishers use Zitadel PATs introspected by the Portal; one API behind two auth prefixes
+- [ADR 0005] Project-qualified roles govern Portal access
 
 **Research write-ups**, on their branches: [r-containment], [r-auth], [r-s3-serving], [r-s3-client], [r-tunnel].
 
@@ -806,6 +806,7 @@ No ticket on the map is open.
 [ADR 0002]: adr/0002-artifacts-on-a-sibling-host.md
 [ADR 0003]: adr/0003-artifact-metadata-in-a-private-s3-bucket.md
 [ADR 0004]: adr/0004-machine-publishers-use-introspected-zitadel-pats.md
+[ADR 0005]: adr/0005-project-qualified-roles-for-portal-access.md
 [#1]: https://github.com/yet-an-other/pub-hub/issues/1
 [#2]: https://github.com/yet-an-other/pub-hub/issues/2
 [#3]: https://github.com/yet-an-other/pub-hub/issues/3

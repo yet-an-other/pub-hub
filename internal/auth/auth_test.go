@@ -20,6 +20,7 @@ type introspectionFixture struct {
 	name        string
 	username    string
 	role        bool
+	admin       bool
 	response    string
 	unavailable bool
 	requests    int
@@ -51,9 +52,17 @@ func (f *introspectionFixture) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		fmt.Fprint(w, f.response)
 		return
 	}
-	fmt.Fprintf(w, `{"active":%t,"sub":%q,"name":%q,"preferred_username":%q`, f.active, f.subject, f.name, f.username)
-	if f.role {
-		fmt.Fprint(w, `,"urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"}}`)
+	fmt.Fprintf(w, `{"active":%t,"sub":%q,"name":%q,"preferred_username":%q,"exp":%d`, f.active, f.subject, f.name, f.username, time.Now().Add(time.Hour).Unix())
+	if f.role || f.admin {
+		roles := make(map[string]map[string]string)
+		if f.role {
+			roles["publisher"] = map[string]string{"org-456": "example.test"}
+		}
+		if f.admin {
+			roles["hub-admin"] = map[string]string{"org-456": "example.test"}
+		}
+		encoded, _ := json.Marshal(roles)
+		fmt.Fprintf(w, `,"urn:zitadel:iam:org:project:project-123:roles":%s`, encoded)
 	}
 	fmt.Fprint(w, `}`)
 }
@@ -63,7 +72,7 @@ func newAuthenticatorFixture(t *testing.T, fixture *introspectionFixture, logs *
 	server := httptest.NewServer(fixture)
 	t.Cleanup(server.Close)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	authenticator, err := NewAuthenticator(server.URL, "hub-api-client", "client-secret", "project-123", "org-456", "publisher", logger)
+	authenticator, err := NewAuthenticator(server.URL, "hub-api-client", "client-secret", "project-123", "publisher", "hub-admin", logger)
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}

@@ -10,7 +10,7 @@ What ships in `deploy/`:
 |---|---|
 | `pubhub-portal.service` | `/etc/systemd/system/pubhub-portal.service` |
 | `portal.toml` | `/etc/pubhub/portal.toml` |
-| `hub.bdgn.me.conf` | the nginx server block for `hub.bdgn.me`, wherever the host keeps them |
+| `hub.bdgn.me.conf` | nginx HTTP-context config for `hub.bdgn.me` (maps and server), wherever the host keeps it |
 | `pub.bdgn.me.conf` | the nginx HTTP-context config for `pub.bdgn.me` (maps, rate zone and server) |
 | `oauth2-proxy.cfg` | `/etc/oauth2-proxy/oauth2-proxy.cfg` |
 | `oauth2-proxy.service` | `/etc/systemd/system/oauth2-proxy.service` |
@@ -28,7 +28,7 @@ The Release workflow runs vet and tests, embeds the tag as the CLI and Portal ve
 
 ## Install
 
-Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#zitadel-machine-publisher-setup) before installing credentials or starting the Portal. The next steps use the users, buckets and application created there.
+Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#zitadel-role-setup) before installing credentials or starting the Portal. The next steps use the users, buckets and application created there.
 
 1. **(owner, host)** Create the `pubhub` system user and put nginx in its group, so nginx can reach the `0660` socket. The nginx user is `nginx`, `www-data` or `http` depending on the distribution.
 
@@ -37,7 +37,7 @@ Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#z
    sudo usermod -aG pubhub nginx
    ```
 
-2. **(owner, host)** Create the config directory and install the config. Set the Zitadel issuer, `hub-api` client ID, project ID, authorization organization ID, `zitadel_publisher_role`, `owner_email`, RGW loopback endpoint, bucket names and `pub.` base URL in `/etc/pubhub/portal.toml`. The RGW endpoint must be the loopback URL, not `s3.bdgn.me`; secrets do not belong in this file.
+2. **(owner, host)** Create the config directory and install the config. Set the Zitadel issuer, `hub-api` client ID, project ID, RGW loopback endpoint, bucket names and `pub.` base URL in `/etc/pubhub/portal.toml`. The optional `zitadel_admin_role` and `zitadel_publisher_role` default to `hub-admin` and `publisher` and must name different roles. Do not set an owner email or authorization organization ID. The RGW endpoint must be the loopback URL, not `s3.bdgn.me`; secrets do not belong in this file.
 
    ```sh
    sudo install -d -m 0755 /etc/pubhub
@@ -72,7 +72,7 @@ Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#z
    journalctl -u pubhub-portal -n 5   # expect {"msg":"portal listening","socket":"/run/pubhub/portal.sock",...}
    ```
 
-6. **(owner, host)** Install the nginx server block. Set the certificate paths, and replace the `allow` lines with the host's LAN and VPN ranges, keeping `deny all` last.
+6. **(owner, host)** Install `hub.bdgn.me.conf` in nginx's `http` context, not inside an existing `server` block; it includes maps for refreshed session cookies. Set the certificate paths, and replace the `allow` lines with the host's LAN and VPN ranges, keeping `deny all` last.
 
    ```sh
    sudo nginx -t && sudo systemctl reload nginx
@@ -94,17 +94,15 @@ Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#z
 
 ## Browser sign-in
 
-**(owner)** In Zitadel, enable "Check Role Assignment on Authentication" for the `pub-hub` project. Create the `owner` role and grant it to the owner. Create the `hub-browser` web app using authorization code flow, Basic client authentication and PKCE S256, with callback `https://hub.bdgn.me/oauth2/callback`. Keep the existing `hub-api` app for PAT introspection. Use the same canonical Zitadel hostname in the app, `portal.toml`, and oauth2-proxy's `oidc_issuer_url`: Zitadel derives its issuer from the request Host. Do not use an internal alias in one place and the canonical hostname in another.
+**(owner)** In Zitadel, enable "Check Role Assignment on Authentication" for the `pub-hub` project. Define `hub-admin` and grant it to each Portal administrator in that project. Create the `hub-browser` web app using authorization code flow, Basic client authentication and PKCE S256, with callback `https://hub.bdgn.me/oauth2/callback`. Enable refresh tokens for the app; oauth2-proxy requests `offline_access`. Keep `hub-api` in the same project for both browser-token and PAT introspection. Use the same canonical Zitadel hostname in the app, `portal.toml`, and oauth2-proxy's `oidc_issuer_url`: Zitadel derives its issuer from the request Host.
 
-**(owner, host)** Install oauth2-proxy v7.15.2 or later at `/usr/local/bin/oauth2-proxy`. Set the unit's `Group=` to the host's nginx group (`nginx`, `www-data` or `http`). The unit runs as `pubhub-oauth2`; its socket is `0660` in a `0750` runtime directory owned by that user and the nginx group. nginx alone should reach this socket. Set the canonical issuer and `hub-browser` client ID in the example config. Put only the owner's exact email in `owner-emails`, one line. Match it to `owner_email` in `portal.toml`.
+**(owner, host)** Install oauth2-proxy v7.15.2 or later at `/usr/local/bin/oauth2-proxy`. Set the unit's `Group=` to the host's nginx group (`nginx`, `www-data` or `http`). The unit runs as `pubhub-oauth2`; its socket is `0660` in a `0750` runtime directory owned by that user and the nginx group. nginx alone should reach this socket. Set the canonical issuer and `hub-browser` client ID in the example config. `email_domains = ["*"]` permits sign-in from the configured issuer; the Portal checks the project-qualified `hub-admin` grant, not an email allowlist. Set `cookie_refresh` below the access-token lifetime if it differs from the example's 1 h. The 12 h cookie expiry is sliding when oauth2-proxy refreshes it, not a hard 12 h cap.
 
 ```sh
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin pubhub-oauth2
 sudo install -d -o root -g root -m 0755 /etc/oauth2-proxy
 sudo install -d -o root -g root -m 0700 /etc/oauth2-proxy/credentials
 sudo install -m 0644 deploy/oauth2-proxy.cfg /etc/oauth2-proxy/oauth2-proxy.cfg
-printf '%s\n' 'owner@example.com' | sudo tee /etc/oauth2-proxy/owner-emails >/dev/null
-sudo chmod 0644 /etc/oauth2-proxy/owner-emails
 sudo install -o root -g root -m 0600 /path/to/hub-browser-client-secret /etc/oauth2-proxy/credentials/hub-browser-client-secret
 # Exactly 32 raw bytes, no newline. Retain this secret for restarts.
 sudo sh -c 'umask 077; dd if=/dev/urandom of=/etc/oauth2-proxy/credentials/cookie-secret bs=32 count=1'
@@ -114,9 +112,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now oauth2-proxy
 ```
 
-Set the TLS certificate paths and LAN/VPN ranges in `hub.bdgn.me.conf`, then `sudo nginx -t && sudo systemctl reload nginx`. Do not expose `hub.` through the tunnel. `/oauth2/auth` must remain `internal`; `/api/` must not use `auth_request`. The CI check runs this nginx block with a stub auth endpoint and forged identity headers on the Portal locations.
+Set the TLS certificate paths and LAN/VPN ranges in `hub.bdgn.me.conf`, then `sudo nginx -t && sudo systemctl reload nginx`. Do not expose `hub.` through the tunnel. `/oauth2/auth` must remain `internal`; `/api/` must not use `auth_request`. nginx passes the browser token and subject only from the auth subrequest and relays refreshed cookies, including a second cookie part. The nginx integration test exercises split cookies on versions 1.24 and 1.30. If another nginx build exposes only the first auth-subrequest `Set-Cookie` value, a session needs more than two parts, or cookie refresh proves unreliable, use server-side session storage instead. The CI nginx test covers forged identity and token headers and split-cookie relaying.
 
-From an owner browser on the LAN, open `https://hub.bdgn.me/`. After sign-in it shows the Catalogue placeholder until the UI ships. Check `/ui/api/whoami` returns `{"label":"owner@example.com"}`. An expired session gets JSON `401` there; `/` redirects to `/oauth2/sign_in`, and `/robots.txt` returns `404` without a `Disallow`. `/oauth2/sign_out` clears the oauth2-proxy cookie. Because `session_cookie_minimal` discards the ID token, this does not end the Zitadel session. For full sign-out, visit `https://<canonical-zitadel-host>/oidc/v1/end_session?client_id=<hub-browser-client-id>` in the browser after `/oauth2/sign_out`. Use the `hub-browser` client ID, not its secret. If you configure a `post_logout_redirect_uri`, register the exact URI in Zitadel first. Confirm a fresh visit to `hub.` asks for sign-in rather than silently reusing the IdP session.
+A signed-in Portal administrator sees the Catalogue. `/ui/api/whoami` returns their email label; someone without `hub-admin` gets `403` even with a valid browser session. An expired session gets JSON `401` on `/ui/api/`; `/` redirects to `/oauth2/sign_in`. `/oauth2/sign_out` clears the oauth2-proxy session, but may leave the Zitadel SSO session alive. To end that too, visit `https://<canonical-zitadel-host>/oidc/v1/end_session?client_id=<hub-browser-client-id>` after sign-out. Use the `hub-browser` client ID, not its secret. If you configure a `post_logout_redirect_uri`, register the exact URI in Zitadel first.
 
 ## Reader host on the LAN
 
@@ -237,23 +235,21 @@ The Portal clears `/var/cache/pubhub/spool` at startup and after each request.
 The `/api/` nginx location permits 101 MB bodies and waits up to 900 seconds
 for a synchronous publish.
 
-## Zitadel machine-Publisher setup
+## Zitadel role setup
 
 **(owner)** Set up Zitadel before starting the Portal:
 
-1. Create the `pub-hub` project and the `hub-api` confidential application for the Portal's token-introspection requests. Verify that `hub-api` belongs to this project, not another project in the instance. Record its client ID and secret, the project ID, and the ID of the authorization organization where machine grants will be assigned. Use the canonical Zitadel hostname for the issuer URL.
-2. Define the `publisher` role in that project. Grant it to each authorized machine account in the chosen authorization organization. Keep a separate service account for each agent host and the owner's CLI, with a PAT expiring in one year. The authorization organization ID is the organization on the grant, not necessarily the account's home organization or the project's owning organization.
-3. Set `zitadel_project_id`, `zitadel_authorization_org_id` and `zitadel_publisher_role = "publisher"` in `portal.toml`. Store the `hub-api` secret in `/etc/pubhub/credentials/hub-api-client-secret`, not in the TOML file or repository.
+1. Create the `pub-hub` project with the `hub-api` confidential application for introspection, plus the `hub-browser` web app described above. Record the project ID and `hub-api` client credentials. Use the canonical Zitadel hostname for the issuer URL.
+2. Define `hub-admin` and `publisher` roles in that project. Grant `hub-admin` to each Portal administrator and `publisher` to each machine account. Grants in any authorization organization count if they belong to this project. Keep a separate service account for each agent host and the owner's CLI, each with a PAT expiring in one year.
+3. Set `zitadel_project_id` in `portal.toml`. Set `zitadel_admin_role` and `zitadel_publisher_role` only if the role keys differ from their `hub-admin` and `publisher` defaults. Store the `hub-api` secret in `/etc/pubhub/credentials/hub-api-client-secret`, not in the TOML file or repository.
 
-The Portal introspects bearer PATs sent to `/api/` through `hub-api`; agents need no direct Zitadel access. Access requires `active: true`, a nonempty `sub`, and `publisher` under exactly `urn:zitadel:iam:org:project:<configured-project-id>:roles`, assigned in the configured authorization organization. A matching scope, audience, unqualified role, or role in another project or organization does not grant access. A missing or inactive PAT gets `401`; an active PAT without this grant gets `403`. The browser's `/ui/api/` cookie sign-in and owner checks are unchanged.
+The Portal introspects bearer PATs sent to `/api/` through `hub-api`; agents need no direct Zitadel access. Access requires `active: true`, a nonempty `sub`, and `publisher` under exactly `urn:zitadel:iam:org:project:<configured-project-id>:roles`, with a nonempty grant in any organization. A matching scope, audience, unqualified role, or role in another project does not grant access. A missing or inactive PAT gets `401`; an active PAT without this grant gets `403`.
 
-Portal caches authorization and identity for at most 60 seconds. An existing PAT gains or loses access after Zitadel propagates the grant change and the cache refreshes; the total delay is **not** guaranteed to be 60 seconds or less. Once a cache entry expires, a Zitadel outage produces retryable `503`, not stale access. The name on future publications comes from introspection's `name`, then `preferred_username`, then stable `sub`. Renaming an account requires no server restart; historical `last_publisher` strings do not change.
+Browser sessions use oauth2-proxy cookies on `/` and `/ui/api/`. The Portal introspects the forwarded access token through `hub-api`, checks that its subject matches the signed-in subject, and requires `hub-admin` in the configured project. Both roles use a token-hash cache for at most 60 seconds, or until token expiry if earlier. Grant removal takes Zitadel propagation plus the cache interval. On expiry, a Zitadel outage yields `503` rather than stale admission; if oauth2-proxy cannot refresh a browser token first, the browser may instead be sent to sign-in. Browser publishes record that administrator's email; machine publishes use introspection's `name`, then `preferred_username`, then `sub`.
 
-### Migrate from the machine-Publisher allowlist
+### Migrate from owner and organization checks
 
-**(owner)** Where live compatibility checks are available, verify against the deployed Zitadel release that introspecting an already-issued PAT with `hub-api` returns the project-qualified role claim and a usable account name. Check grant and removal on the same PAT, including propagation, and check a matching role in another project and authorization organization. If claims do not update reliably, stop the migration; do not silently switch to a different lookup or authorize by `active` alone. Also check existing PAT scopes, disabled, expired or revoked accounts, and behavior after Zitadel becomes unavailable.
-
-Grant the designated role to **every existing allowlisted machine account before replacing the Portal binary**. Verify `hub-api` belongs to the configured project, set the project and authorization organization IDs in `portal.toml`, and remove `[publishers]` entirely. Then install and restart the new Portal version. An obsolete `[publishers]` table fails startup with a migration error rather than preserving the old access path. Check `/api/whoami` with an existing PAT and one without a grant. Subsequent grants, removals and renames happen in Zitadel without a Portal config edit or restart. Rollback to an allowlist-based binary requires restoring its compatible config and accounting for any grants changed since migration.
+**(owner)** Assign `hub-admin` to every Portal administrator and `publisher` to each existing machine Publisher before switching the Portal and oauth2-proxy configuration. Remove `owner_email` and `zitadel_authorization_org_id` from `portal.toml`, and remove any `[publishers]` table. Remove `authenticated_emails_file` from oauth2-proxy and delete its old owner-email file. Update the nginx config and oauth2-proxy settings together with the Portal binary, then restart the services. Obsolete Portal config keys fail startup instead of silently being ignored. Rollback requires restoring the old Portal, its compatible config, nginx and oauth2-proxy settings, the owner-email file, and the old owner role grant.
 
 ## Download a release
 
@@ -294,7 +290,7 @@ sh scripts/install-pubhub.sh          # latest release
 sh scripts/install-pubhub.sh v0.6.0   # pin or roll back to an available release
 ```
 
-On first install, when there is no `$XDG_CONFIG_HOME/pubhub/config.toml` (or `~/.config/pubhub/config.toml`), the script runs `pubhub login`. Enter the PAT from the owner's Zitadel service account; the CLI validates it through the Portal and saves it in a private `0600` config file. The account must hold the `publisher` role in the configured Zitadel project and authorization organization. Run the installer with an interactive terminal for a hidden PAT prompt. If login fails, the verified CLI stays installed so you can retry with `~/.local/bin/pubhub login`.
+On first install, when there is no `$XDG_CONFIG_HOME/pubhub/config.toml` (or `~/.config/pubhub/config.toml`), the script runs `pubhub login`. Enter the PAT from the owner's Zitadel service account; the CLI validates it through the Portal and saves it in a private `0600` config file. The account must hold the `publisher` role in the configured Zitadel project. Run the installer with an interactive terminal for a hidden PAT prompt. If login fails, the verified CLI stays installed so you can retry with `~/.local/bin/pubhub login`.
 
 Subsequent runs leave credentials unchanged, even if the PAT has expired. Renew one with `pubhub login`. `PUBHUB_URL` sets the Portal URL during login; the default is `https://hub.bdgn.me`. A pinned release must include a CLI binary for your platform: `v0.5.0` has only Linux builds, so macOS needs a later release. This script installs the CLI only; upgrading the Portal still follows [Upgrade](#upgrade).
 

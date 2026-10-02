@@ -220,7 +220,7 @@ func newHandlerForApplication(t *testing.T, app *application, discoveryStatus in
 		switch r.URL.Path {
 		case "/oauth/v2/introspect":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"active":true,"sub":"user-123","name":"owner","urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"}}}`)
+			_, _ = io.WriteString(w, `{"active":true,"sub":"user-123","name":"owner","urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"},"hub-admin":{"org-456":"example.test"}}}`)
 		case "/.well-known/openid-configuration":
 			w.WriteHeader(discoveryStatus)
 		default:
@@ -228,14 +228,14 @@ func newHandlerForApplication(t *testing.T, app *application, discoveryStatus in
 		}
 	}))
 	t.Cleanup(idp.Close)
-	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", "project-123", "org-456", "publisher", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", "project-123", "publisher", "hub-admin", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}
 	if err := app.prepareSpool(); err != nil {
 		t.Fatalf("prepareSpool: %v", err)
 	}
-	return routes(authenticator, app, "owner@example.test")
+	return routes(authenticator, app)
 }
 
 func multipartFile(t *testing.T, fileName, contents string) ([]byte, string) {
@@ -291,17 +291,17 @@ func TestSingleFilePublishReadAndReplace(t *testing.T) {
 	}
 	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/oauth/v2/introspect" {
-			_, _ = io.WriteString(w, `{"active":true,"sub":"user-123","name":"owner","urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"}}}`)
+			_, _ = io.WriteString(w, `{"active":true,"sub":"user-123","name":"owner","urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"},"hub-admin":{"org-456":"example.test"}}}`)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer idp.Close()
-	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", "project-123", "org-456", "publisher", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", "project-123", "publisher", "hub-admin", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := routes(authenticator, app, "owner@example.test")
+	handler := routes(authenticator, app)
 	app.now = func() time.Time {
 		baseTime = baseTime.Add(time.Second)
 		return baseTime

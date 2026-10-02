@@ -85,7 +85,7 @@ func TestSingleFilePublishAgainstS3CompatibleServer(t *testing.T) {
 		}
 	}))
 	defer idp.Close()
-	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", "project-123", "org-456", "publisher", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", "project-123", "publisher", "hub-admin", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestSingleFilePublishAgainstS3CompatibleServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	app.loadStartup(ctx)
-	handler := routes(authenticator, app, "owner@example.test")
+	handler := routes(authenticator, app)
 	content := "<!doctype html><title>Integration page</title><p>hello</p>"
 	response := multipartRequest(t, handler, "xform/notes/plan.html", "plan.html", content)
 	if response.Code != http.StatusCreated {
@@ -175,7 +175,7 @@ func TestSingleFilePublishAgainstS3CompatibleServer(t *testing.T) {
 
 	restarted := newApplication(store, "https://pub.example.test", t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	restarted.loadStartup(ctx)
-	reloaded := artifactRequest(t, routes(authenticator, restarted, "owner@example.test"), http.MethodGet, "/api/artifacts/xform/notes/plan.html", nil, "")
+	reloaded := artifactRequest(t, routes(authenticator, restarted), http.MethodGet, "/api/artifacts/xform/notes/plan.html", nil, "")
 	if reloaded.Code != http.StatusOK || decodeArtifact(t, reloaded) != metadata {
 		t.Errorf("metadata after startup reload = %d %s, want %+v", reloaded.Code, reloaded.Body, metadata)
 	}

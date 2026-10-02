@@ -73,7 +73,7 @@ func startWithIssuer(t *testing.T, issuer string) runningPortal {
 		}
 	}
 	t.Setenv("CREDENTIALS_DIRECTORY", credentialsDir)
-	config := fmt.Appendf(nil, "socket = %q\nzitadel_issuer_url = %q\nhub_api_client_id = \"hub-api-client\"\nzitadel_project_id = \"project-123\"\nzitadel_authorization_org_id = \"org-456\"\nzitadel_publisher_role = \"publisher\"\nowner_email = \"owner@example.test\"\ns3_endpoint = \"http://127.0.0.1:1\"\nartifact_bucket = \"pubhub-artifacts\"\nmetadata_bucket = \"pubhub-meta\"\npublic_base_url = \"https://pub.bdgn.me\"\nspool_directory = %q\n", socket, issuer, filepath.Join(dir, "spool"))
+	config := fmt.Appendf(nil, "socket = %q\nzitadel_issuer_url = %q\nhub_api_client_id = \"hub-api-client\"\nzitadel_project_id = \"project-123\"\nzitadel_publisher_role = \"publisher\"\nzitadel_admin_role = \"hub-admin\"\ns3_endpoint = \"http://127.0.0.1:1\"\nartifact_bucket = \"pubhub-artifacts\"\nmetadata_bucket = \"pubhub-meta\"\npublic_base_url = \"https://pub.bdgn.me\"\nspool_directory = %q\n", socket, issuer, filepath.Join(dir, "spool"))
 	if err := os.WriteFile(configPath, config, 0o644); err != nil {
 		t.Fatal(err)
 	}

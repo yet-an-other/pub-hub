@@ -9,7 +9,16 @@ import (
 	"github.com/yet-an-other/pub-hub/internal/buildversion"
 )
 
-func TestBrowserAPIUsesOwnerIdentityAndTheSameHandlers(t *testing.T) {
+func setBrowserSession(r *http.Request, email string) {
+	if email == "" {
+		return
+	}
+	r.Header.Set("X-Auth-Request-User", "user-123")
+	r.Header.Set("X-Auth-Request-Email", email)
+	r.Header.Set("X-Auth-Request-Access-Token", "browser-token")
+}
+
+func TestBrowserAPIUsesAdministratorRoleAndTheSameHandlers(t *testing.T) {
 	h := newArtifactHandler(t, newMemoryArtifactStore())
 	for _, tc := range []struct {
 		path, email string
@@ -17,12 +26,12 @@ func TestBrowserAPIUsesOwnerIdentityAndTheSameHandlers(t *testing.T) {
 		label       string
 	}{
 		{"/ui/api/whoami", "", 401, ""},
-		{"/ui/api/whoami", "other@example.test", 403, ""},
+		{"/ui/api/whoami", "other@example.test", 200, `"label":"other@example.test","portal_version":"`},
 		{"/ui/api/whoami", "owner@example.test", 200, `"label":"owner@example.test","portal_version":"`},
 		{"/ui/api/artifacts", "owner@example.test", 200, `[]`},
 	} {
 		r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me"+tc.path, nil)
-		r.Header.Set("X-Auth-Request-Email", tc.email)
+		setBrowserSession(r, tc.email)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != tc.status {
@@ -37,7 +46,7 @@ func TestBrowserAPIUsesOwnerIdentityAndTheSameHandlers(t *testing.T) {
 	}
 }
 
-func TestAPIPrefixesKeepBearerAndOwnerAuthenticationSeparate(t *testing.T) {
+func TestAPIPrefixesKeepBearerAndBrowserAuthenticationSeparate(t *testing.T) {
 	h := newArtifactHandler(t, newMemoryArtifactStore())
 	for _, tc := range []struct {
 		path, bearer, email, label string
@@ -52,13 +61,11 @@ func TestAPIPrefixesKeepBearerAndOwnerAuthenticationSeparate(t *testing.T) {
 		if tc.bearer != "" {
 			r.Header.Set("Authorization", "Bearer "+tc.bearer)
 		}
-		if tc.email != "" {
-			r.Header.Set("X-Auth-Request-Email", tc.email)
-		}
+		setBrowserSession(r, tc.email)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != tc.status || (tc.label != "" && !strings.Contains(w.Body.String(), tc.label)) {
-			t.Errorf("%s bearer=%t owner=%t: %d %s, want %d %s", tc.path, tc.bearer != "", tc.email != "", w.Code, w.Body.String(), tc.status, tc.label)
+			t.Errorf("%s bearer=%t browser=%t: %d %s, want %d %s", tc.path, tc.bearer != "", tc.email != "", w.Code, w.Body.String(), tc.status, tc.label)
 		}
 	}
 }
@@ -69,7 +76,7 @@ func TestWhoamiReportsPortalReleaseVersion(t *testing.T) {
 	defer func() { buildversion.Release = previous }()
 	h := newArtifactHandler(t, newMemoryArtifactStore())
 	r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me/ui/api/whoami", nil)
-	r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+	setBrowserSession(r, "owner@example.test")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"label":"owner@example.test","portal_version":"v9.8.7"`) {
@@ -80,7 +87,7 @@ func TestWhoamiReportsPortalReleaseVersion(t *testing.T) {
 func TestBrowserConfigUsesConfiguredReaderHost(t *testing.T) {
 	h := newArtifactHandler(t, newMemoryArtifactStore())
 	r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me/ui/api/config", nil)
-	r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+	setBrowserSession(r, "owner@example.test")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"public_base_url":"https://pub.bdgn.me"`) {
@@ -94,7 +101,7 @@ func TestBrowserMutationRejectsForeignOriginsIncludingSameSite(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPatch, "https://hub.bdgn.me/ui/api/projects/xform", strings.NewReader(`{"description":"bad"}`))
 		r.Header.Set("Origin", origin)
 		r.Header.Set("Sec-Fetch-Site", "same-site")
-		r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+		setBrowserSession(r, "owner@example.test")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != http.StatusForbidden {
@@ -104,7 +111,7 @@ func TestBrowserMutationRejectsForeignOriginsIncludingSameSite(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPatch, "https://hub.bdgn.me/ui/api/projects/xform", strings.NewReader(`{"description":"ok"}`))
 	r.Header.Set("Origin", "https://hub.bdgn.me")
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+	setBrowserSession(r, "owner@example.test")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
@@ -120,7 +127,7 @@ func TestBrowserCatalogueMutations(t *testing.T) {
 	request := func(method, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(method, "https://hub.bdgn.me/ui/api/"+path, strings.NewReader(body))
-		r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+		setBrowserSession(r, "owner@example.test")
 		r.Header.Set("Origin", "https://hub.bdgn.me")
 		r.Header.Set("Sec-Fetch-Site", "same-origin")
 		if body != "" {
@@ -154,7 +161,7 @@ func TestBrowserCatalogueMutations(t *testing.T) {
 func TestCatalogueShellAndRoutes(t *testing.T) {
 	h := newArtifactHandler(t, newMemoryArtifactStore())
 	r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me/anything", nil)
-	r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+	setBrowserSession(r, "owner@example.test")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "Pub Hub Catalogue") {
@@ -165,7 +172,7 @@ func TestCatalogueShellAndRoutes(t *testing.T) {
 	}
 	for _, path := range []string{"/", "/nested/client/route"} {
 		r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me"+path, nil)
-		r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+		setBrowserSession(r, "owner@example.test")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != 200 || !strings.Contains(w.Body.String(), "Pub Hub Catalogue") {
@@ -174,7 +181,7 @@ func TestCatalogueShellAndRoutes(t *testing.T) {
 	}
 	for _, path := range []string{"/assets/missing.js", "/ui/api/missing"} {
 		r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me"+path, nil)
-		r.Header.Set("X-Auth-Request-Email", "owner@example.test")
+		setBrowserSession(r, "owner@example.test")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != http.StatusNotFound {

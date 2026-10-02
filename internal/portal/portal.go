@@ -47,7 +47,7 @@ func run(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	authenticator, err := auth.NewAuthenticator(cfg.ZitadelIssuerURL, cfg.HubAPIClientID, secret, cfg.ZitadelProjectID, cfg.ZitadelAuthorizationOrgID, cfg.ZitadelPublisherRole, log)
+	authenticator, err := auth.NewAuthenticator(cfg.ZitadelIssuerURL, cfg.HubAPIClientID, secret, cfg.ZitadelProjectID, cfg.ZitadelPublisherRole, cfg.ZitadelAdminRole, log)
 	if err != nil {
 		return fmt.Errorf("configure authentication: %w", err)
 	}
@@ -86,7 +86,7 @@ func run(ctx context.Context, configPath string, log *slog.Logger) error {
 	}
 
 	srv := &http.Server{
-		Handler:  routes(authenticator, app, cfg.OwnerEmail),
+		Handler:  routes(authenticator, app),
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelError),
 	}
 	errc := make(chan error, 1)
@@ -133,11 +133,11 @@ func loadCredential(name string) (string, error) {
 	return value, nil
 }
 
-func routes(authenticator *auth.Authenticator, app *application, ownerEmail string) http.Handler {
+func routes(authenticator *auth.Authenticator, app *application) http.Handler {
 	api := http.HandlerFunc(app.apiRoutes)
 	machineAPI := authenticator.Require(http.StripPrefix("/api", api))
-	browserAPI := auth.RequireOwner(ownerEmail, http.NewCrossOriginProtection().Handler(http.StripPrefix("/ui/api", api)))
-	catalogue := auth.RequireOwner(ownerEmail, catalogueHandler())
+	browserAPI := authenticator.RequireAdmin(http.NewCrossOriginProtection().Handler(http.StripPrefix("/ui/api", api)))
+	catalogue := authenticator.RequireAdmin(catalogueHandler())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.EscapedPath() {
 		case "/healthz":

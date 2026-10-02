@@ -23,8 +23,6 @@ func validConfig() string {
 zitadel_issuer_url = "https://zitadel.example.test"
 hub_api_client_id = "hub-api"
 zitadel_project_id = "project-123"
-zitadel_authorization_org_id = "org-456"
-owner_email = "owner@example.test"
 s3_endpoint = "http://127.0.0.1:7480"
 artifact_bucket = "pubhub-artifacts"
 metadata_bucket = "pubhub-meta"
@@ -49,11 +47,8 @@ func TestLoadReadsThePortalSettings(t *testing.T) {
 	if cfg.HubAPIClientID != "hub-api" {
 		t.Errorf("HubAPIClientID = %q", cfg.HubAPIClientID)
 	}
-	if cfg.OwnerEmail != "owner@example.test" {
-		t.Errorf("OwnerEmail = %q", cfg.OwnerEmail)
-	}
-	if cfg.ZitadelProjectID != "project-123" || cfg.ZitadelAuthorizationOrgID != "org-456" || cfg.ZitadelPublisherRole != "publisher" {
-		t.Errorf("publisher trust config = (%q, %q, %q)", cfg.ZitadelProjectID, cfg.ZitadelAuthorizationOrgID, cfg.ZitadelPublisherRole)
+	if cfg.ZitadelProjectID != "project-123" || cfg.ZitadelAdminRole != "hub-admin" || cfg.ZitadelPublisherRole != "publisher" {
+		t.Errorf("role trust config = (%q, %q, %q)", cfg.ZitadelProjectID, cfg.ZitadelAdminRole, cfg.ZitadelPublisherRole)
 	}
 	if cfg.S3Endpoint != "http://127.0.0.1:7480" || cfg.ArtifactBucket != "pubhub-artifacts" || cfg.MetadataBucket != "pubhub-meta" || cfg.PublicBaseURL != "https://pub.bdgn.me" || cfg.SpoolDirectory != "/var/cache/pubhub/spool" {
 		t.Errorf("storage config = (%q, %q, %q, %q)", cfg.S3Endpoint, cfg.ArtifactBucket, cfg.MetadataBucket, cfg.PublicBaseURL)
@@ -93,13 +88,14 @@ func TestLoadRejectsInvalidAuthenticationSettings(t *testing.T) {
 		{"issuer missing", "socket = \"/run/pubhub/portal.sock\"\nhub_api_client_id = \"hub-api\"", "zitadel issuer URL"},
 		{"issuer relative", strings.Replace(validConfig(), "https://zitadel.example.test", "zitadel", 1), "absolute URL"},
 		{"client id missing", "socket = \"/run/pubhub/portal.sock\"\nzitadel_issuer_url = \"https://zitadel.example.test\"", "hub API client id"},
-		{"owner missing", strings.Replace(validConfig(), "owner_email = \"owner@example.test\"\n", "", 1), "owner email"},
-		{"owner invalid", strings.Replace(validConfig(), "owner@example.test", "owner example.test", 1), "owner email"},
 		{"missing project", strings.Replace(validConfig(), "zitadel_project_id = \"project-123\"\n", "", 1), "project id"},
-		{"missing organization", strings.Replace(validConfig(), "zitadel_authorization_org_id = \"org-456\"\n", "", 1), "authorization organization id"},
+		{"obsolete owner", validConfig() + "owner_email = \"owner@example.test\"\n", "remove owner_email"},
+		{"obsolete organization", validConfig() + "zitadel_authorization_org_id = \"org-456\"\n", "remove zitadel_authorization_org_id"},
 		{"obsolete publishers", validConfig() + "\n[publishers]\n\"user-123\" = \"owner\"\n", "remove [publishers]"},
 		{"empty publishers table", validConfig() + "\n[publishers]\n", "remove [publishers]"},
-		{"invalid role", validConfig() + "\nzitadel_publisher_role = \" \"\n", "publisher role"},
+		{"invalid publisher role", validConfig() + "zitadel_publisher_role = \" \"\n", "publisher role"},
+		{"invalid admin role", validConfig() + "zitadel_admin_role = \"\"\n", "admin role"},
+		{"same roles", validConfig() + "zitadel_admin_role = \"publisher\"\n", "must be different"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -111,6 +107,16 @@ func TestLoadRejectsInvalidAuthenticationSettings(t *testing.T) {
 				t.Errorf("error %q does not mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsConfiguredRoleNames(t *testing.T) {
+	cfg, err := config.Load(writeConfig(t, validConfig()+"zitadel_admin_role = \"operators\"\nzitadel_publisher_role = \"writers\"\n"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ZitadelAdminRole != "operators" || cfg.ZitadelPublisherRole != "writers" {
+		t.Errorf("roles = (%q, %q), want operators and writers", cfg.ZitadelAdminRole, cfg.ZitadelPublisherRole)
 	}
 }
 

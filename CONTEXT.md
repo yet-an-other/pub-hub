@@ -38,8 +38,12 @@ _Avoid_: Broken, partial, stuck
 The authenticated UI and publish API, on its own host separate from the Artifacts; it owns storage and metadata of all Artifacts.
 _Avoid_: Admin, dashboard, backend
 
+**Portal administrator**:
+A person with full access to the Portal's authenticated UI, including publishing and deleting Artifacts and Projects. A machine Publisher is not a Portal administrator.
+_Avoid_: Web user
+
 **Publisher**:
-Whoever publishes an Artifact: the owner via the Portal, or an agent/CLI with machine credentials.
+Whoever publishes an Artifact: a Portal administrator or an agent/CLI with machine credentials.
 _Avoid_: Author, uploader
 
 **Reader**:

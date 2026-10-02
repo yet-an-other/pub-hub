@@ -1,5 +1,7 @@
 # Zitadel Publisher authorization
 
+This investigation records the earlier machine-Publisher migration. [ADR 0005](../adr/0005-project-qualified-roles-for-portal-access.md) supersedes its organization-specific policy and pre-migration live-check recommendation.
+
 ## Conclusion and scope
 
 Source supports keeping existing service-account PAT clients and replacing ADR 0004's subject allowlist with a project-qualified role check. Introspection can supply both current role assignments and the account's human-readable name. No Action or separate administrative lookup is indicated by the inspected code. This is source evidence, not a verified result against the deployed version.

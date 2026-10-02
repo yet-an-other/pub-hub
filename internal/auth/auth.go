@@ -1,4 +1,4 @@
-// Package auth authenticates machine Publishers with Zitadel PATs.
+// Package auth authenticates machine Publishers and Portal administrators with Zitadel.
 package auth
 
 import (
@@ -25,10 +25,11 @@ const (
 var errIDPUnavailable = errors.New("identity provider unavailable")
 
 type introspectionResult struct {
-	Active  bool
-	Subject string
-	Label   string
-	Granted bool
+	Active    bool
+	Subject   string
+	Label     string
+	Roles     map[string]bool
+	ExpiresAt time.Time
 }
 
 type cacheEntry struct {
@@ -36,17 +37,16 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
-// Introspector asks Zitadel whether a PAT is active. Results are cached by a
-// SHA-256 digest of the token for 60 seconds; the token itself is never kept
-// in the cache.
+// Introspector asks Zitadel whether a token is active. Results are cached by
+// the token's SHA-256 digest for at most 60 seconds and never past its expiry;
+// active tokens without an expiry claim are not cached. The token itself is
+// never kept in the cache.
 type Introspector struct {
 	endpoint     string
 	issuerURL    string
 	clientID     string
 	clientSecret string
 	roleClaim    string
-	roleKey      string
-	orgID        string
 	httpClient   *http.Client
 	now          func() time.Time
 
@@ -99,8 +99,20 @@ func (i *Introspector) inspect(ctx context.Context, token string) (introspection
 		return introspectionResult{}, err
 	}
 
+	// Without an expiry claim, an active token must be re-introspected on
+	// every request: caching it could keep it active past its actual expiry.
+	if result.Active && result.ExpiresAt.IsZero() {
+		return result, nil
+	}
 	i.mu.Lock()
-	i.cache[key] = cacheEntry{result: result, expiresAt: i.now().Add(cacheTTL)}
+	now = i.now()
+	expiresAt := now.Add(cacheTTL)
+	if !result.ExpiresAt.IsZero() && result.ExpiresAt.Before(expiresAt) {
+		expiresAt = result.ExpiresAt
+	}
+	if now.Before(expiresAt) {
+		i.cache[key] = cacheEntry{result: result, expiresAt: expiresAt}
+	}
 	i.mu.Unlock()
 	return result, nil
 }
@@ -131,6 +143,13 @@ func (i *Introspector) request(ctx context.Context, token string) (introspection
 	var result introspectionResult
 	_ = json.Unmarshal(claims["active"], &result.Active)
 	_ = json.Unmarshal(claims["sub"], &result.Subject)
+	var exp int64
+	if json.Unmarshal(claims["exp"], &exp) == nil && exp > 0 {
+		result.ExpiresAt = time.Unix(exp, 0)
+		if !i.now().Before(result.ExpiresAt) {
+			result.Active = false
+		}
+	}
 	var name, username string
 	_ = json.Unmarshal(claims["name"], &name)
 	_ = json.Unmarshal(claims["preferred_username"], &username)
@@ -143,9 +162,15 @@ func (i *Introspector) request(ctx context.Context, token string) (introspection
 	}
 	var roles map[string]map[string]json.RawMessage
 	if err := json.Unmarshal(claims[i.roleClaim], &roles); err == nil {
-		var domain string
-		if err := json.Unmarshal(roles[i.roleKey][i.orgID], &domain); err == nil && domain != "" {
-			result.Granted = true
+		result.Roles = make(map[string]bool)
+		for role, organizations := range roles {
+			for orgID, rawDomain := range organizations {
+				var domain string
+				if orgID != "" && json.Unmarshal(rawDomain, &domain) == nil && strings.TrimSpace(domain) != "" {
+					result.Roles[role] = true
+					break
+				}
+			}
 		}
 	}
 	return result, nil
@@ -181,17 +206,22 @@ func PublisherFromContext(ctx context.Context) (Publisher, bool) {
 	return publisher, ok
 }
 
-// Authenticator protects the machine Publisher API with bearer-token
-// authentication and a project- and organization-qualified role assignment.
+// Authenticator protects the Portal's browser UI and machine Publisher API
+// with separate roles in the same Zitadel project.
 type Authenticator struct {
-	introspector *Introspector
-	log          *slog.Logger
+	introspector  *Introspector
+	publisherRole string
+	adminRole     string
+	log           *slog.Logger
 }
 
-// NewAuthenticator constructs an authenticator for the designated Zitadel role.
-func NewAuthenticator(issuerURL, clientID, clientSecret, projectID, orgID, roleKey string, log *slog.Logger) (*Authenticator, error) {
-	if projectID == "" || orgID == "" || roleKey == "" {
-		return nil, errors.New("Zitadel project, authorization organization and publisher role are required")
+// NewAuthenticator constructs an authenticator for the designated Zitadel roles.
+func NewAuthenticator(issuerURL, clientID, clientSecret, projectID, publisherRole, adminRole string, log *slog.Logger) (*Authenticator, error) {
+	if projectID == "" || publisherRole == "" || adminRole == "" {
+		return nil, errors.New("Zitadel project, publisher role and admin role are required")
+	}
+	if publisherRole == adminRole {
+		return nil, errors.New("Zitadel admin and publisher roles must be different")
 	}
 	introspector, err := NewIntrospector(issuerURL, clientID, clientSecret)
 	if err != nil {
@@ -201,9 +231,7 @@ func NewAuthenticator(issuerURL, clientID, clientSecret, projectID, orgID, roleK
 		log = slog.Default()
 	}
 	introspector.roleClaim = "urn:zitadel:iam:org:project:" + projectID + ":roles"
-	introspector.roleKey = roleKey
-	introspector.orgID = orgID
-	return &Authenticator{introspector: introspector, log: log}, nil
+	return &Authenticator{introspector: introspector, publisherRole: publisherRole, adminRole: adminRole, log: log}, nil
 }
 
 // IDPReachable reports whether the configured Zitadel issuer is reachable.
@@ -211,20 +239,32 @@ func (a *Authenticator) IDPReachable(ctx context.Context) bool {
 	return a.introspector.reachable(ctx)
 }
 
-// RequireOwner trusts only the identity supplied by the nginx auth_request
-// location. The Portal socket must not be exposed to untrusted peers.
-func RequireOwner(ownerEmail string, next http.Handler) http.Handler {
+// RequireAdmin trusts the browser session identity and access token forwarded
+// by nginx from oauth2-proxy's auth subrequest. Only nginx may reach the Portal
+// socket; nginx must overwrite these headers on every Portal location.
+func (a *Authenticator) RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subject := r.Header.Get("X-Auth-Request-User")
 		email := r.Header.Get("X-Auth-Request-Email")
-		if email == "" {
+		token := r.Header.Get("X-Auth-Request-Access-Token")
+		if subject == "" || email == "" || token == "" {
 			WriteError(w, http.StatusUnauthorized, "unauthenticated", "browser session required")
 			return
 		}
-		if email != ownerEmail {
-			WriteError(w, http.StatusForbidden, "forbidden", "owner identity required")
+		result, err := a.introspector.inspect(r.Context(), token)
+		if err != nil {
+			WriteError(w, http.StatusServiceUnavailable, "idp_unavailable", "identity provider unavailable")
 			return
 		}
-		publisher := Publisher{Subject: email, Label: email}
+		if !result.Active || result.Subject == "" || result.Subject != subject {
+			WriteError(w, http.StatusUnauthorized, "unauthenticated", "invalid browser session")
+			return
+		}
+		if !result.Roles[a.adminRole] {
+			WriteError(w, http.StatusForbidden, "forbidden", "Portal administrator role required")
+			return
+		}
+		publisher := Publisher{Subject: subject, Label: email}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), publisherContextKey{}, publisher)))
 	})
 }
@@ -249,7 +289,7 @@ func (a *Authenticator) Require(next http.Handler) http.Handler {
 			a.reject(w, http.StatusUnauthorized, "unauthenticated", "missing or invalid bearer token", result.Subject)
 			return
 		}
-		if !result.Granted {
+		if !result.Roles[a.publisherRole] {
 			a.reject(w, http.StatusForbidden, "forbidden", "Publisher role required", result.Subject)
 			return
 		}
