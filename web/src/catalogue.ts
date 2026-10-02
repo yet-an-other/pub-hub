@@ -4,6 +4,8 @@ export type Artifact = { path: string; url: string; title: string; description: 
 export type Project = { name: string; description: string; artifact_count: number }
 export type Group = { project: Project; artifacts: Artifact[]; categories: { name: string; artifacts: Artifact[] }[] }
 
+export const projectNameMatches = (expected: string, entered: string) => entered === expected
+
 export function groups(projects: Project[], artifacts: Artifact[], query: string, incomplete: boolean): Group[] {
   const q = query.trim().toLocaleLowerCase()
   return projects.map(project => {

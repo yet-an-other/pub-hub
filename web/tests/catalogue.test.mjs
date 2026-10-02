@@ -1,9 +1,13 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { groups } from '../src/catalogue.ts'
+import { groups, projectNameMatches } from '../src/catalogue.ts'
 const art = (path, updated_at, state = 'published', description = '') => ({ path, updated_at, state, description, title: path, last_publisher: 'agent' })
 const projects = [{ name: 'empty', description: 'keep me', artifact_count: 0 }, { name: 'older', description: '', artifact_count: 2 }, { name: 'newer', description: '', artifact_count: 1 }]
 const items = [art('older/z.html', '2025-01-01'), art('older/a/b/', '2025-01-02', 'incomplete'), art('newer/demo.html', '2025-02-01')]
+test('Project deletion confirmation requires an exact case-sensitive name', () => {
+  assert.equal(projectNameMatches('xform', 'xform'), true)
+  for (const value of ['', 'Xform', 'xform ', 'xform-other']) assert.equal(projectNameMatches('xform', value), false)
+})
 test('recent Projects first, empty described Projects last, direct Artifacts before Categories', () => {
   const result = groups(projects, items, '', false)
   assert.deepEqual(result.map(g => g.project.name), ['newer', 'older', 'empty'])

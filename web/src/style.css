@@ -39,7 +39,7 @@ kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 
 .inventory { border: 1px solid #e4e6df; border-radius: 12px; background: white; overflow: hidden }
 .project + .project { border-top: 1px solid #e4e6df }
-.project-head { background: #eef4ef80; padding: 12px 24px; display: flex; align-items: flex-start; gap: 12px }
+.project-head { background: #eef4ef80; padding: 12px 24px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px }
 .project-head > svg { color: #78716c; flex: none; margin-top: 3px }
 .project-info { flex: 1; min-width: 0 }
 .project-name { display: flex; align-items: baseline; gap: 8px }
@@ -49,6 +49,14 @@ kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 .project-description { font-size: 14px; color: #57534e }
 .project-description > .edit-description { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .project-description form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px }
+.project-delete-button { margin-left: 12px; padding: 5px 8px; border: 1px solid #fecaca; border-radius: 5px; background: white; color: #991b1b; font-size: 12px; white-space: nowrap }
+.project-delete-confirm { flex-basis: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 10px; border: 1px solid #fecaca; border-radius: 6px; background: #fef2f2; font-size: 12px }
+.project-delete-confirm p { grid-column: 1 / -1; margin: 0; color: #7f1d1d }
+.project-delete-confirm label { grid-column: 1 / -1 }
+.project-delete-confirm input { min-width: 0; padding: 5px; border: 1px solid #d6d3d1; border-radius: 4px }
+.project-delete-confirm button { padding: 5px 8px; border: 1px solid #d6d3d1; border-radius: 5px; background: white; font-size: 12px }
+.project-delete-confirm .danger { color: #991b1b }
+.project-delete-confirm button:disabled { opacity: .5; cursor: default }
 .project-description label { width: 100%; color: #57534e; font-size: 12px }
 .project-description input { flex: 1; min-width: 160px; padding: 6px; border: 1px solid #a8a29e; border-radius: 4px }
 .category { border-top: 1px solid #e4e6df; padding: 7px 24px 7px 56px; margin: 0; color: #78716c; font: 12px ui-monospace, monospace }

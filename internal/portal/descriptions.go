@@ -130,6 +130,12 @@ func (a *application) patchProject(w http.ResponseWriter, r *http.Request, name 
 		a.storageUnavailable(w, "load metadata records", err)
 		return
 	}
+	release, acquired := a.artifacts.beginProjectMutation(name, false)
+	if !acquired {
+		writeBusy(w, "Project mutation already in progress")
+		return
+	}
+	defer release()
 	a.recordWriteMu.Lock()
 	if value == "" {
 		err = a.store.DeleteRecord(r.Context(), name+".json")

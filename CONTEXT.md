@@ -24,6 +24,10 @@ _Avoid_: Site, archive, package
 
 ### Lifecycle
 
+**Project deletion**:
+The permanent removal of a Project's description and all its Artifacts, across every Category.
+_Avoid_: Archive, hide
+
 **Incomplete**:
 An Artifact whose last publish or delete started but has not finished. Until it is published again or deleted, Readers may see a mix of old and new files, or 404s.
 _Avoid_: Broken, partial, stuck

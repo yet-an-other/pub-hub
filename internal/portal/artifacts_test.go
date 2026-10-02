@@ -57,7 +57,18 @@ func (s *memoryArtifactStore) LoadRecords(context.Context) ([]json.RawMessage, e
 		return nil, s.loadRecordsError
 	}
 	out := make([]json.RawMessage, 0, len(s.records))
-	for _, record := range s.records {
+	for key, record := range s.records {
+		if !strings.Contains(key, "/") {
+			var project projectRecord
+			if err := json.Unmarshal(record, &project); err == nil {
+				payload, _ := json.Marshal(struct {
+					Project     string `json:"project"`
+					Description string `json:"description"`
+				}{strings.TrimSuffix(key, ".json"), project.Description})
+				out = append(out, payload)
+				continue
+			}
+		}
 		out = append(out, append(json.RawMessage(nil), record...))
 	}
 	return out, nil

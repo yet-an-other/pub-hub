@@ -18,16 +18,18 @@ import (
 // artifactCatalogue owns Artifact records and per-Artifact claims. Metadata
 // writes share writeMu with Project descriptions; byte transfers do not hold it.
 type artifactCatalogue struct {
-	store         artifactStore
-	publicBaseURL string
-	mu            sync.RWMutex
-	records       map[string]artifactRecord
-	inFlight      map[string]struct{}
-	writeMu       *sync.Mutex
+	store            artifactStore
+	publicBaseURL    string
+	mu               sync.RWMutex
+	records          map[string]artifactRecord
+	inFlight         map[string]struct{}
+	activeProjects   map[string]int
+	deletingProjects map[string]struct{}
+	writeMu          *sync.Mutex
 }
 
 func newArtifactCatalogue(store artifactStore, baseURL string, writeMu *sync.Mutex) *artifactCatalogue {
-	return &artifactCatalogue{store: store, publicBaseURL: baseURL, records: make(map[string]artifactRecord), inFlight: make(map[string]struct{}), writeMu: writeMu}
+	return &artifactCatalogue{store: store, publicBaseURL: baseURL, records: make(map[string]artifactRecord), inFlight: make(map[string]struct{}), activeProjects: make(map[string]int), deletingProjects: make(map[string]struct{}), writeMu: writeMu}
 }
 
 func (c *artifactCatalogue) load(payloads []json.RawMessage) (int, int, error) {
@@ -117,16 +119,22 @@ func (c *artifactCatalogue) beginMutation(path naming.ArtifactPath) (*artifactMu
 	stem := path.Stem()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	project := strings.SplitN(path.PublicPath(), "/", 2)[0]
+	if _, deleting := c.deletingProjects[project]; deleting {
+		return nil, false
+	}
 	if _, exists := c.inFlight[stem]; exists {
 		return nil, false
 	}
 	c.inFlight[stem] = struct{}{}
-	return &artifactMutation{catalogue: c, path: path, active: true}, true
+	c.activeProjects[project]++
+	return &artifactMutation{catalogue: c, path: path, project: project, active: true}, true
 }
 
 type artifactMutation struct {
 	catalogue *artifactCatalogue
 	path      naming.ArtifactPath
+	project   string
 	mu        sync.Mutex
 	active    bool
 }
@@ -140,7 +148,36 @@ func (m *artifactMutation) release() {
 	m.active = false
 	m.catalogue.mu.Lock()
 	delete(m.catalogue.inFlight, m.path.Stem())
+	m.catalogue.activeProjects[m.project]--
+	if m.catalogue.activeProjects[m.project] == 0 {
+		delete(m.catalogue.activeProjects, m.project)
+	}
 	m.catalogue.mu.Unlock()
+}
+
+func (c *artifactCatalogue) beginProjectMutation(project string, deleting bool) (func(), bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.deletingProjects[project]; exists || (deleting && c.activeProjects[project] != 0) {
+		return nil, false
+	}
+	if deleting {
+		c.deletingProjects[project] = struct{}{}
+	} else {
+		c.activeProjects[project]++
+	}
+	return func() {
+		c.mu.Lock()
+		if deleting {
+			delete(c.deletingProjects, project)
+		} else {
+			c.activeProjects[project]--
+			if c.activeProjects[project] == 0 {
+				delete(c.activeProjects, project)
+			}
+		}
+		c.mu.Unlock()
+	}, true
 }
 
 var (

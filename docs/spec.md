@@ -293,6 +293,7 @@ Records don't store the file list, tags or publish history ([#6]). For the file 
   - While a publish, delete or description edit of an Artifact runs, any other mutation of it gets `409 busy` with `Retry-After: 5`.
   - Different Artifacts proceed in parallel.
   - The marker is never persisted, so a record left `incomplete` after a crash blocks nothing. Publishing again or deleting fixes it.
+- Project deletion atomically reserves the whole Project after checking that no Artifact or Project mutation is active. The reservation also rejects new Artifact publish, replace, delete and description edits, Project description edits, and another Project deletion with `409 busy` and `Retry-After: 5`. Upload staging is covered, even before its Artifact record exists. Reads and mutations in other Projects continue. The reservation does not hold the global metadata-write lock while deleting bytes.
 
 ### 5.4 Publish and delete sequences
 
@@ -317,6 +318,8 @@ The request is synchronous and returns once the publish is complete. A crash lea
 Deletion is immediate and final: a plain `404`, the name reusable at once, and no tombstones.
 
 A crash leaves the record `incomplete`, which the Catalogue shows as Incomplete. A delete is driven by the record, not by the entry, so repeating it removes whatever bytes remain, even when the entry is already gone ([#17]).
+
+**Project deletion** is a synchronous server-side operation. It snapshots the Project's exact-prefix Artifact records after admission, then deletes each through the lifecycle above, including Incomplete records. It stops at the first error. The Project description remains until all Artifact records and bytes are gone, then its record is removed. This operation is not atomic across Artifacts: completed deletions stay deleted after a failure, and no background cleanup or rollback runs. The Catalogue refreshes and the owner can retry after correcting the failure or restarting the Portal; retry acts on the Project's current contents. An empty undescribed Project is a successful no-op; a description-only Project loses its description. Names are reusable after deletion.
 
 ### 5.5 Serving
 
@@ -376,6 +379,7 @@ The API path equals the Artifact's public path: `pub.bdgn.me/xform/notes/plan.ht
 | `GET /api/artifacts?prefix=…` | List, with no pagination (the list is in memory and single-tenant) |
 | `GET /api/projects` | Projects with their description and Artifact count, including empty described ones |
 | `PATCH /api/projects/<project>` | `{"description": …}`, where an empty value clears it |
+| `DELETE /api/projects/<project>` | Permanently delete every Artifact in the Project and its description; `204` only when complete. The operation is resumable by retry after partial failure |
 | `GET /api/whoami` | The caller's Publisher label and Portal version (`portal_version`) |
 
 - Paths are strict: `…/plan` without a suffix is a `404`.
@@ -439,9 +443,11 @@ The Catalogue is the Portal SPA at `hub.bdgn.me/`, calling the API under `/ui/ap
 
 ### 7.2 The list
 
-- **Project header**: the name, `/<project>/`, the Artifact count, and the Project description.
+- **Project header**: the name, `/<project>/`, the Artifact count, the Project description, and a small **Delete Project** action, including for empty Projects.
   - The description is click-to-edit, one line, and can be cleared.
   - An empty described Project shows "No Artifacts yet".
+  - Deletion requires typing the exact Project name. Confirmation shows the total Artifact count as informational and explains that the server deletes the contents as they exist when it accepts the operation, including hidden, nested, Bundle and Incomplete Artifacts. Public URLs stop working and there is no undo.
+  - Cancel makes no mutation. During deletion the UI prevents duplicate submission and refreshes after success or failure. On failure it shows the error and remaining Catalogue contents; manual Retry refreshes and reopens confirmation with the name cleared and current count. It does not retry automatically.
 - **Order**: Projects by most recent activity, with empty ones last.
 - **Categories**: sub-headings inside each Project. Artifacts directly under the Project come first.
 - **Artifact row**: the file or Bundle icon sits left of the title. The full public URL and private description follow below, aligned with the title; the description keeps line breaks. Text shares one font family, and there is no accordion.
@@ -473,7 +479,7 @@ Small Edit, Republish and Delete buttons sit in a vertical line to the right of 
 - A `401` from `/ui/api/` means the 12 h session has expired, and the SPA reloads to go through sign-in ([#7]).
 - State-changing calls are same-origin, so they pass `http.CrossOriginProtection` ([#7]).
 
-The Catalogue has no move or rename, no bulk actions, no alternative sort orders and no activity feed ([#9], [#15]).
+The Catalogue has no move or rename, no multi-Project bulk actions, no alternative sort orders and no activity feed ([#9], [#15]).
 
 ## 8. Publishing client: `pubhub`
 

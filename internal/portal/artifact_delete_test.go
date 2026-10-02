@@ -40,6 +40,50 @@ func publishDeleteFixture(t *testing.T, handler http.Handler, path string) {
 	}
 }
 
+func TestDeleteProjectRemovesEveryArtifactAndDescription(t *testing.T) {
+	store := newMemoryArtifactStore()
+	handler := newArtifactHandler(t, store)
+	for _, path := range []string{"xform/plan.html", "xform/notes/site/", "xform-other/keep.html"} {
+		publishDeleteFixture(t, handler, path)
+	}
+	if response := artifactRequest(t, handler, http.MethodPatch, "/api/projects/xform", []byte(`{"description":"Private"}`), "application/json"); response.Code != http.StatusOK {
+		t.Fatalf("describe Project = %d %s", response.Code, response.Body)
+	}
+
+	response := artifactRequest(t, handler, http.MethodDelete, "/api/projects/xform", nil, "")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("DELETE Project = %d %s, want 204", response.Code, response.Body)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.records) != 1 || len(store.objects) != 1 {
+		t.Fatalf("remaining records=%v objects=%v", store.records, store.objects)
+	}
+	if _, ok := store.records["xform.json"]; ok {
+		t.Fatal("Project description remains")
+	}
+	if _, ok := store.records["xform-other/keep.json"]; !ok {
+		t.Fatal("similarly named Project was deleted")
+	}
+}
+
+func TestDeleteEmptyProjectIsNoOpAndNameCanBeReused(t *testing.T) {
+	store := newMemoryArtifactStore()
+	handler := newArtifactHandler(t, store)
+	if response := artifactRequest(t, handler, http.MethodDelete, "/api/projects/xform", nil, ""); response.Code != http.StatusNoContent {
+		t.Fatalf("delete empty undescribed Project = %d %s", response.Code, response.Body)
+	}
+	if response := artifactRequest(t, handler, http.MethodPatch, "/api/projects/xform", []byte(`{"description":"Keep"}`), "application/json"); response.Code != http.StatusOK {
+		t.Fatalf("describe reused Project = %d %s", response.Code, response.Body)
+	}
+	if response := artifactRequest(t, handler, http.MethodDelete, "/api/projects/xform", nil, ""); response.Code != http.StatusNoContent {
+		t.Fatalf("delete description-only Project = %d %s", response.Code, response.Body)
+	}
+	if response := multipartRequest(t, handler, "xform/reused.html", "reused.html", "again"); response.Code != http.StatusCreated {
+		t.Fatalf("reuse Project name = %d %s", response.Code, response.Body)
+	}
+}
+
 func TestDeleteArtifactRemovesEntryBeforeFilesAndRecord(t *testing.T) {
 	for _, tc := range []struct {
 		path  string

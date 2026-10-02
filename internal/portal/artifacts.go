@@ -285,9 +285,16 @@ func (a *application) apiRoutes(w http.ResponseWriter, r *http.Request) {
 		a.listProjects(w, r)
 		return
 	}
-	if strings.HasPrefix(path, "/projects/") && r.Method == http.MethodPatch {
-		a.patchProject(w, r, strings.TrimPrefix(path, "/projects/"))
-		return
+	if strings.HasPrefix(path, "/projects/") {
+		name := strings.TrimPrefix(path, "/projects/")
+		if r.Method == http.MethodPatch {
+			a.patchProject(w, r, name)
+			return
+		}
+		if r.Method == http.MethodDelete {
+			a.deleteProject(w, r, name)
+			return
+		}
 	}
 	if strings.HasPrefix(path, "/artifacts/") {
 		if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodDelete && r.Method != http.MethodPatch {
