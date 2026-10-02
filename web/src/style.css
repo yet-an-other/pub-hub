@@ -58,7 +58,6 @@ kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 .row { border-top: 1px solid #e4e6df }
 .row:hover { background: #f6f6f280 }
 .row-main { display: grid; grid-template-columns: 18px minmax(0, 1fr) 110px 120px; align-items: start; gap: 14px; padding: 16px 24px }
-.category-group .row-main { padding-left: 48px }
 .row-icon { color: #78716c; padding-top: 2px }
 .row-content { min-width: 0; font-size: 14px }
 .row-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere }
@@ -107,7 +106,6 @@ kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
   .private, .email, .divider { display: none }
   .hero { flex-wrap: wrap }
   .row-main { grid-template-columns: 14px minmax(0, 1fr); column-gap: 2px; row-gap: 12px; padding: 16px 16px 16px 0 }
-  .category-group .row-main { padding-left: 16px }
   .row-icon svg { width: 14px; height: 14px }
   .row-meta, .row-actions { grid-column: 2; justify-self: end; width: 120px }
   .row-meta { grid-row: 2 }
