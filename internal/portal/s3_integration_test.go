@@ -77,7 +77,7 @@ func TestSingleFilePublishAgainstS3CompatibleServer(t *testing.T) {
 		switch r.URL.Path {
 		case "/oauth/v2/introspect":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"active":true,"sub":"integration-publisher"}`)
+			_, _ = io.WriteString(w, `{"active":true,"sub":"integration-publisher","name":"integration","urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"}}}`)
 		case "/.well-known/openid-configuration":
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -85,7 +85,7 @@ func TestSingleFilePublishAgainstS3CompatibleServer(t *testing.T) {
 		}
 	}))
 	defer idp.Close()
-	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", map[string]string{"integration-publisher": "integration"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", "project-123", "org-456", "publisher", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

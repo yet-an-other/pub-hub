@@ -73,7 +73,7 @@ func startWithIssuer(t *testing.T, issuer string) runningPortal {
 		}
 	}
 	t.Setenv("CREDENTIALS_DIRECTORY", credentialsDir)
-	config := fmt.Appendf(nil, "socket = %q\nzitadel_issuer_url = %q\nhub_api_client_id = \"hub-api-client\"\nowner_email = \"owner@example.test\"\ns3_endpoint = \"http://127.0.0.1:1\"\nartifact_bucket = \"pubhub-artifacts\"\nmetadata_bucket = \"pubhub-meta\"\npublic_base_url = \"https://pub.bdgn.me\"\nspool_directory = %q\n\n[publishers]\n\"user-123\" = \"owner\"\n", socket, issuer, filepath.Join(dir, "spool"))
+	config := fmt.Appendf(nil, "socket = %q\nzitadel_issuer_url = %q\nhub_api_client_id = \"hub-api-client\"\nzitadel_project_id = \"project-123\"\nzitadel_authorization_org_id = \"org-456\"\nzitadel_publisher_role = \"publisher\"\nowner_email = \"owner@example.test\"\ns3_endpoint = \"http://127.0.0.1:1\"\nartifact_bucket = \"pubhub-artifacts\"\nmetadata_bucket = \"pubhub-meta\"\npublic_base_url = \"https://pub.bdgn.me\"\nspool_directory = %q\n", socket, issuer, filepath.Join(dir, "spool"))
 	if err := os.WriteFile(configPath, config, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestHealthzAnswers200WhileUp(t *testing.T) {
 	}
 }
 
-func TestWhoamiReturnsTheAllowlistedPublisherLabel(t *testing.T) {
+func TestWhoamiReturnsTheZitadelPublisherName(t *testing.T) {
 	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/oauth/v2/introspect" {
 			t.Errorf("introspection path = %q", r.URL.Path)
@@ -169,7 +169,7 @@ func TestWhoamiReturnsTheAllowlistedPublisherLabel(t *testing.T) {
 			t.Errorf("introspection token = %q, want pat", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"active":true,"sub":"user-123"}`))
+		_, _ = w.Write([]byte(`{"active":true,"sub":"user-123","name":"owner","urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"}}}`))
 	}))
 	defer idp.Close()
 	p := startWithIssuer(t, idp.URL)

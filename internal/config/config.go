@@ -25,9 +25,11 @@ type Config struct {
 	// Portal when it introspects PATs. Its secret arrives through
 	// systemd's LoadCredential=.
 	HubAPIClientID string `toml:"hub_api_client_id"`
-	// Publishers maps Zitadel user IDs to the Publisher labels recorded by the
-	// Portal.
-	Publishers map[string]string `toml:"publishers"`
+	// These IDs and role key pin the exact Zitadel assignment trusted for
+	// machine Publishers. They are not account-specific.
+	ZitadelProjectID          string `toml:"zitadel_project_id"`
+	ZitadelAuthorizationOrgID string `toml:"zitadel_authorization_org_id"`
+	ZitadelPublisherRole      string `toml:"zitadel_publisher_role"`
 	// OwnerEmail is the only browser identity admitted under /ui/api/.
 	OwnerEmail string `toml:"owner_email"`
 
@@ -52,12 +54,18 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config %s: %w", path, err)
 	}
+	if md.IsDefined("publishers") {
+		return Config{}, fmt.Errorf("config %s: remove [publishers]; grant the publisher role in Zitadel and configure zitadel_project_id and zitadel_authorization_org_id", path)
+	}
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
 		keys := make([]string, len(undecoded))
 		for i, k := range undecoded {
 			keys[i] = k.String()
 		}
 		return Config{}, fmt.Errorf("config %s: unknown keys: %s", path, strings.Join(keys, ", "))
+	}
+	if !md.IsDefined("zitadel_publisher_role") {
+		cfg.ZitadelPublisherRole = "publisher"
 	}
 	if cfg.SpoolDirectory == "" {
 		cfg.SpoolDirectory = "/var/cache/pubhub/spool"
@@ -78,6 +86,12 @@ func (c Config) validate() error {
 		return errors.New("zitadel issuer URL is required")
 	case c.HubAPIClientID == "":
 		return errors.New("hub API client id is required")
+	case strings.TrimSpace(c.ZitadelProjectID) != c.ZitadelProjectID || c.ZitadelProjectID == "":
+		return errors.New("valid Zitadel project id is required")
+	case strings.TrimSpace(c.ZitadelAuthorizationOrgID) != c.ZitadelAuthorizationOrgID || c.ZitadelAuthorizationOrgID == "":
+		return errors.New("valid Zitadel authorization organization id is required")
+	case strings.TrimSpace(c.ZitadelPublisherRole) != c.ZitadelPublisherRole || c.ZitadelPublisherRole == "":
+		return errors.New("valid Zitadel publisher role is required")
 	}
 
 	issuer, err := url.Parse(c.ZitadelIssuerURL)
@@ -107,17 +121,6 @@ func (c Config) validate() error {
 	publicURL, err := url.Parse(c.PublicBaseURL)
 	if err != nil || publicURL.Scheme != "https" || publicURL.Host == "" || publicURL.User != nil || (publicURL.Path != "" && publicURL.Path != "/") || publicURL.RawQuery != "" || publicURL.Fragment != "" {
 		return fmt.Errorf("public base URL must be an https origin, got %q", c.PublicBaseURL)
-	}
-	for userID, label := range c.Publishers {
-		if strings.TrimSpace(userID) == "" {
-			return errors.New("publisher user id must not be empty")
-		}
-		if strings.TrimSpace(userID) != userID {
-			return fmt.Errorf("publisher user id must not have surrounding whitespace, got %q", userID)
-		}
-		if strings.TrimSpace(label) == "" {
-			return fmt.Errorf("publisher label for %q must not be empty", userID)
-		}
 	}
 	return nil
 }

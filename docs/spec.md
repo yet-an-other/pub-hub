@@ -203,16 +203,16 @@ The same Go handlers are mounted under `/api/` and `/ui/api/`, and only the auth
 
 ### 4.3 Machine Publishers
 
-From [ADR 0004] and [#7]:
+From [ADR 0004], [#7] and [#35]:
 
 - **Credentials:**
   - Each agent host has its own Zitadel service account, and so does the owner's own CLI.
   - Each account holds a PAT with a one-year expiry. The owner follows this as a policy; the Portal doesn't enforce it.
 - **Clients** send `Authorization: Bearer <PAT>` to `https://hub.bdgn.me/api/…` and never talk to Zitadel.
 - **The Portal:**
-  - It introspects each PAT through its own Zitadel API app, `hub-api`, and caches the result for 60 s, keyed by the token's hash.
-  - Zitadel reports any PAT in the instance as active, so the Portal admits a token only if its account's user id is on the **allowlist** in Portal config ([#3]). The allowlist maps user id → label.
-  - Changing the allowlist means a Portal restart. Artifacts keep being served meanwhile.
+  - It introspects each PAT through its own Zitadel API app, `hub-api`, which must belong to the configured project. It caches authorization and identity for at most 60 s, keyed by the token's hash.
+  - It requires `active: true`, nonempty `sub`, and the configured `publisher` role under exactly `urn:zitadel:iam:org:project:<configured-project-id>:roles`, with the configured authorization organization ID as the role's key. The role's leaf value is an organization domain, not the authorization organization ID. An active PAT alone, scope, audience, unqualified role claim or matching role in another project or authorization organization cannot grant access ([#35]).
+  - Grant or remove the role in Zitadel without changing Portal config or restarting. Effective changes depend on Zitadel propagation plus the Portal cache; removal is not guaranteed within 60 s. After cache expiry, an unavailable Zitadel yields `503` rather than stale admission.
 - **Rejected** ([ADR 0004]):
   - Portal-minted API keys.
   - Client credentials or private-key JWT.
@@ -223,8 +223,8 @@ From [ADR 0004] and [#7]:
 | Situation | Answer |
 |---|---|
 | Missing or invalid token | `401 unauthenticated` |
-| Valid PAT whose account is not on the allowlist | `403 forbidden` |
-| Zitadel unreachable during introspection (transport failure) | `503 idp_unavailable`, retryable. Cached results keep working for 60 s |
+| Active PAT without the role in the configured project and authorization organization | `403 forbidden` |
+| Zitadel unreachable during introspection (transport failure) | `503 idp_unavailable`, retryable. Unexpired cached results work for at most 60 s; expired entries are never extended during an outage |
 | Browser session missing or expired | `/ui/api/`: JSON `401`, and the SPA reloads. `/`: `302` to sign-in |
 
 Existing browser sessions last until they expire, even while Zitadel is down ([#7], [#8]).
@@ -232,7 +232,7 @@ Existing browser sessions last until they expire, even while Zitadel is down ([#
 ### 4.5 Authorisation and identity
 
 - Every authenticated Publisher has full rights: publish, replace, delete and edit descriptions, anywhere. There are no per-credential scopes ([ADR 0004], [#7]).
-- The **Publisher label**, recorded as "last Publisher", is the allowlist label for a machine Publisher and the owner's email for a publish from the Catalogue ([#7]).
+- The **Publisher label**, recorded as "last Publisher", is introspection's current `name` for a machine Publisher, falling back to `preferred_username` and then stable `sub`; for a publish from the Catalogue it is the owner's email ([#7], [#35]). New publishes take the name after cache refresh. Existing `last_publisher` strings stay unchanged after an account rename.
 - `GET /api/whoami` returns the caller's label and Portal version ([#8]).
 
 ## 5. Storage and serving
@@ -566,7 +566,7 @@ The skill is `skill/pubhub-publish/SKILL.md` in this repo, and the owner install
 - It writes a one-line, private `-d` description saying what the page is and why it was made.
 - After a successful publish, it summarizes the Project in one sentence using the root README, other docs, then source code, and runs `pubhub describe-project` to fill an empty Project description without replacing an existing one.
 - It returns the URL, noting that the page is public but unlisted; if the Project description fails, it reports the separate failure.
-- On an auth error, it points to `pubhub login` or the allowlist.
+- On an auth error, it points to `pubhub login` for missing or expired PATs, or to the machine account's role grant in the configured Zitadel project and authorization organization for `403`.
 
 ## 10. Deployment
 
@@ -594,7 +594,7 @@ oauth2-proxy always trusts forwarded headers from unix-socket peers, so the sock
   - the owner email;
   - the bucket names and the RGW endpoint;
   - the `pub.` base URL;
-  - the Publisher allowlist, as `user id = "label"` pairs.
+  - the trusted Zitadel project ID, authorization organization ID and `publisher` role key, not per-user accounts or labels. Obsolete `[publishers]` tables fail startup with a migration error ([#35]).
 - **Portal secrets** arrive via `LoadCredential=` from root-only files in `/etc/pubhub/credentials/` ([#14]):
   - the RGW keys of user `pub-hub`;
   - the `hub-api` client secret.
@@ -650,7 +650,7 @@ From [#3], [#7] and [#14]:
 - A `pub-hub` project with "Check Role Assignment on Authentication", and the `owner` role granted to the owner.
 - Web app `hub-browser`: code flow, Basic auth, PKCE S256, callback `https://hub.bdgn.me/oauth2/callback`.
 - API app `hub-api`, for the Portal's introspection.
-- One service account per agent host, each with a one-year PAT and an allowlist entry.
+- One service account per agent host, each with a one-year PAT. Grant the `publisher` role in the configured project and authorization organization before upgrading from the allowlist-based Portal. Verify that `hub-api` is an app in that project. Remove `[publishers]` from config before starting the new version. Assignments and names then change in Zitadel without a Portal restart ([#35]).
 
 ## 11. Public exposure through Cloudflare Tunnel
 
@@ -747,7 +747,7 @@ Where a source was loose, the spec reads it as follows. The owner can overrule a
 3. The field name of a single-file publish's one file part carries no meaning. The object key is the Artifact path.
 4. `pubhub delete <path>` takes the Artifact path with its suffix, as `pubhub list` prints it and as the API requires.
 5. A single-file source must be an `.html` file, since a single-file Artifact is one ([CONTEXT.md]). Anything else is a local validation error (exit `2`).
-6. `portal.toml` also needs the Zitadel issuer URL and the `hub-api` client id for introspection. [#14] lists the other fields.
+6. `portal.toml` also needs the Zitadel issuer URL and the `hub-api` client id for introspection. [#14] lists the other fields; [#35] replaces the allowlist with project ID, authorization organization ID and role key.
 7. `/healthz` and `/readyz` are exact locations on `hub.` alongside the [ADR 0004] table ([#15]).
 8. A Project's "most recent activity" is the latest `updated at` among its Artifacts.
 
@@ -788,6 +788,7 @@ No ticket on the map is open.
 - [#14] Deployment on the home server: units, nginx, secrets, provisioning
 - [#15] Backups and observability
 - [#17] Crash visibility for a delete in progress
+- [#35] Authorize machine Publishers through Zitadel roles
 
 **ADRs:**
 
@@ -814,6 +815,7 @@ No ticket on the map is open.
 [#7]: https://github.com/yet-an-other/pub-hub/issues/7
 [#8]: https://github.com/yet-an-other/pub-hub/issues/8
 [#9]: https://github.com/yet-an-other/pub-hub/issues/9
+[#35]: https://github.com/yet-an-other/pub-hub/issues/35
 [#10]: https://github.com/yet-an-other/pub-hub/issues/10
 [#11]: https://github.com/yet-an-other/pub-hub/issues/11
 [#12]: https://github.com/yet-an-other/pub-hub/issues/12

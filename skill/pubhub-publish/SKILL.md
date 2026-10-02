@@ -39,7 +39,7 @@ If publishing fails, use the CLI's `error: <code>: <message>` and exit status:
 | --- | --- |
 | `2` | Usage or local validation error. For `auth_missing`, point the user to `pubhub login` (or `PUBHUB_TOKEN`); for other errors, fix the source/path or reported configuration issue locally. The CLI suggests a name but never rewrites it. |
 | `3` | `exists`, `shape_conflict`, or `nesting_conflict`. Stop and ask the user whether to update, choose a different path, or resolve the conflict. Do not silently overwrite, rename, or delete. |
-| `4` | Authentication or authorization (`401`/`403`). Point the user to `pubhub login` for a missing/expired PAT, or to the Portal's machine-Publisher allowlist if their account is not admitted. Do not print credentials. |
+| `4` | Authentication or authorization (`401`/`403`). Point the user to `pubhub login` for a missing or expired PAT. For `403`, ask the owner to check the machine account's `publisher` grant in the Portal's configured Zitadel project and authorization organization. Do not print credentials. |
 | `5` | `busy` or HTTP `503` after the CLI's three retries. Report the failure rather than claiming publication. |
 | `1` | Other failure. Report the CLI error. |
 

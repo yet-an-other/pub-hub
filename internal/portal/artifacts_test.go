@@ -220,7 +220,7 @@ func newHandlerForApplication(t *testing.T, app *application, discoveryStatus in
 		switch r.URL.Path {
 		case "/oauth/v2/introspect":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"active":true,"sub":"user-123"}`)
+			_, _ = io.WriteString(w, `{"active":true,"sub":"user-123","name":"owner","urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"}}}`)
 		case "/.well-known/openid-configuration":
 			w.WriteHeader(discoveryStatus)
 		default:
@@ -228,7 +228,7 @@ func newHandlerForApplication(t *testing.T, app *application, discoveryStatus in
 		}
 	}))
 	t.Cleanup(idp.Close)
-	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", map[string]string{"user-123": "owner"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", "project-123", "org-456", "publisher", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}
@@ -291,13 +291,13 @@ func TestSingleFilePublishReadAndReplace(t *testing.T) {
 	}
 	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/oauth/v2/introspect" {
-			_, _ = io.WriteString(w, `{"active":true,"sub":"user-123"}`)
+			_, _ = io.WriteString(w, `{"active":true,"sub":"user-123","name":"owner","urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"}}}`)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer idp.Close()
-	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", map[string]string{"user-123": "owner"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	authenticator, err := auth.NewAuthenticator(idp.URL, "hub-api", "secret", "project-123", "org-456", "publisher", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

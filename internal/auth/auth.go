@@ -25,8 +25,10 @@ const (
 var errIDPUnavailable = errors.New("identity provider unavailable")
 
 type introspectionResult struct {
-	Active  bool   `json:"active"`
-	Subject string `json:"sub"`
+	Active  bool
+	Subject string
+	Label   string
+	Granted bool
 }
 
 type cacheEntry struct {
@@ -42,6 +44,9 @@ type Introspector struct {
 	issuerURL    string
 	clientID     string
 	clientSecret string
+	roleClaim    string
+	roleKey      string
+	orgID        string
 	httpClient   *http.Client
 	now          func() time.Time
 
@@ -119,9 +124,29 @@ func (i *Introspector) request(ctx context.Context, token string) (introspection
 		return introspectionResult{}, fmt.Errorf("%w: introspection returned %s", errIDPUnavailable, resp.Status)
 	}
 
-	var result introspectionResult
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBody)).Decode(&result); err != nil {
+	var claims map[string]json.RawMessage
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBody)).Decode(&claims); err != nil || claims == nil {
 		return introspectionResult{}, fmt.Errorf("%w: invalid introspection response", errIDPUnavailable)
+	}
+	var result introspectionResult
+	_ = json.Unmarshal(claims["active"], &result.Active)
+	_ = json.Unmarshal(claims["sub"], &result.Subject)
+	var name, username string
+	_ = json.Unmarshal(claims["name"], &name)
+	_ = json.Unmarshal(claims["preferred_username"], &username)
+	result.Label = result.Subject
+	if strings.TrimSpace(username) != "" {
+		result.Label = username
+	}
+	if strings.TrimSpace(name) != "" {
+		result.Label = name
+	}
+	var roles map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(claims[i.roleClaim], &roles); err == nil {
+		var domain string
+		if err := json.Unmarshal(roles[i.roleKey][i.orgID], &domain); err == nil && domain != "" {
+			result.Granted = true
+		}
 	}
 	return result, nil
 }
@@ -157,16 +182,17 @@ func PublisherFromContext(ctx context.Context) (Publisher, bool) {
 }
 
 // Authenticator protects the machine Publisher API with bearer-token
-// authentication and the configured user-ID allowlist.
+// authentication and a project- and organization-qualified role assignment.
 type Authenticator struct {
 	introspector *Introspector
-	allowlist    map[string]string
 	log          *slog.Logger
 }
 
-// NewAuthenticator constructs an authenticator for the configured Zitadel
-// issuer and Publisher allowlist.
-func NewAuthenticator(issuerURL, clientID, clientSecret string, allowlist map[string]string, log *slog.Logger) (*Authenticator, error) {
+// NewAuthenticator constructs an authenticator for the designated Zitadel role.
+func NewAuthenticator(issuerURL, clientID, clientSecret, projectID, orgID, roleKey string, log *slog.Logger) (*Authenticator, error) {
+	if projectID == "" || orgID == "" || roleKey == "" {
+		return nil, errors.New("Zitadel project, authorization organization and publisher role are required")
+	}
 	introspector, err := NewIntrospector(issuerURL, clientID, clientSecret)
 	if err != nil {
 		return nil, err
@@ -174,11 +200,10 @@ func NewAuthenticator(issuerURL, clientID, clientSecret string, allowlist map[st
 	if log == nil {
 		log = slog.Default()
 	}
-	allowed := make(map[string]string, len(allowlist))
-	for userID, label := range allowlist {
-		allowed[userID] = label
-	}
-	return &Authenticator{introspector: introspector, allowlist: allowed, log: log}, nil
+	introspector.roleClaim = "urn:zitadel:iam:org:project:" + projectID + ":roles"
+	introspector.roleKey = roleKey
+	introspector.orgID = orgID
+	return &Authenticator{introspector: introspector, log: log}, nil
 }
 
 // IDPReachable reports whether the configured Zitadel issuer is reachable.
@@ -220,17 +245,16 @@ func (a *Authenticator) Require(next http.Handler) http.Handler {
 			a.reject(w, http.StatusServiceUnavailable, "idp_unavailable", "identity provider unavailable", "")
 			return
 		}
-		if !result.Active {
+		if !result.Active || strings.TrimSpace(result.Subject) == "" {
 			a.reject(w, http.StatusUnauthorized, "unauthenticated", "missing or invalid bearer token", result.Subject)
 			return
 		}
-		label, ok := a.allowlist[result.Subject]
-		if !ok {
-			a.reject(w, http.StatusForbidden, "forbidden", "Publisher is not allowlisted", result.Subject)
+		if !result.Granted {
+			a.reject(w, http.StatusForbidden, "forbidden", "Publisher role required", result.Subject)
 			return
 		}
 
-		publisher := Publisher{Subject: result.Subject, Label: label}
+		publisher := Publisher{Subject: result.Subject, Label: result.Label}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), publisherContextKey{}, publisher)))
 	})
 }

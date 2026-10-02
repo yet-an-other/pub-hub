@@ -17,6 +17,10 @@ type introspectionFixture struct {
 	mu          sync.Mutex
 	active      bool
 	subject     string
+	name        string
+	username    string
+	role        bool
+	response    string
 	unavailable bool
 	requests    int
 	gotToken    string
@@ -43,15 +47,23 @@ func (f *introspectionFixture) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"active":%t,"sub":%q}`, f.active, f.subject)
+	if f.response != "" {
+		fmt.Fprint(w, f.response)
+		return
+	}
+	fmt.Fprintf(w, `{"active":%t,"sub":%q,"name":%q,"preferred_username":%q`, f.active, f.subject, f.name, f.username)
+	if f.role {
+		fmt.Fprint(w, `,"urn:zitadel:iam:org:project:project-123:roles":{"publisher":{"org-456":"example.test"}}`)
+	}
+	fmt.Fprint(w, `}`)
 }
 
-func newAuthenticatorFixture(t *testing.T, fixture *introspectionFixture, allowlist map[string]string, logs *bytes.Buffer) (*Authenticator, *httptest.Server) {
+func newAuthenticatorFixture(t *testing.T, fixture *introspectionFixture, logs *bytes.Buffer) (*Authenticator, *httptest.Server) {
 	t.Helper()
 	server := httptest.NewServer(fixture)
 	t.Cleanup(server.Close)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	authenticator, err := NewAuthenticator(server.URL, "hub-api-client", "client-secret", allowlist, logger)
+	authenticator, err := NewAuthenticator(server.URL, "hub-api-client", "client-secret", "project-123", "org-456", "publisher", logger)
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}
@@ -71,10 +83,10 @@ func errorCode(t *testing.T, response *httptest.ResponseRecorder) string {
 	return body.Error.Code
 }
 
-func TestRequireAcceptsAnAllowlistedPATAndAddsPublisherIdentity(t *testing.T) {
-	fixture := &introspectionFixture{active: true, subject: "user-123"}
+func TestRequireAcceptsARoleGrantedPATAndAddsPublisherIdentity(t *testing.T) {
+	fixture := &introspectionFixture{active: true, subject: "user-123", name: "owner", role: true}
 	var logs bytes.Buffer
-	authenticator, _ := newAuthenticatorFixture(t, fixture, map[string]string{"user-123": "owner"}, &logs)
+	authenticator, _ := newAuthenticatorFixture(t, fixture, &logs)
 
 	handler := authenticator.Require(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		publisher, ok := PublisherFromContext(r.Context())
@@ -114,7 +126,7 @@ func TestRequireAcceptsAnAllowlistedPATAndAddsPublisherIdentity(t *testing.T) {
 func TestRequireRejectsMissingOrMalformedBearerCredentials(t *testing.T) {
 	fixture := &introspectionFixture{active: true, subject: "user-123"}
 	var logs bytes.Buffer
-	authenticator, _ := newAuthenticatorFixture(t, fixture, map[string]string{"user-123": "owner"}, &logs)
+	authenticator, _ := newAuthenticatorFixture(t, fixture, &logs)
 	handler := authenticator.Require(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("protected handler ran")
 	}))
@@ -143,23 +155,24 @@ func TestRequireRejectsMissingOrMalformedBearerCredentials(t *testing.T) {
 	}
 }
 
-func TestRequireDistinguishesInactiveAndUnallowlistedPublishers(t *testing.T) {
+func TestRequireDistinguishesInactiveAndUnauthorizedPublishers(t *testing.T) {
 	cases := []struct {
 		name       string
 		active     bool
 		subject    string
-		allowlist  map[string]string
+		role       bool
 		wantStatus int
 		wantCode   string
 	}{
-		{name: "inactive", active: false, subject: "user-123", allowlist: map[string]string{"user-123": "owner"}, wantStatus: http.StatusUnauthorized, wantCode: "unauthenticated"},
-		{name: "not allowlisted", active: true, subject: "user-456", allowlist: map[string]string{"user-123": "owner"}, wantStatus: http.StatusForbidden, wantCode: "forbidden"},
+		{name: "inactive", active: false, subject: "user-123", role: true, wantStatus: http.StatusUnauthorized, wantCode: "unauthenticated"},
+		{name: "no role", active: true, subject: "user-456", wantStatus: http.StatusForbidden, wantCode: "forbidden"},
+		{name: "missing subject", active: true, subject: "", role: true, wantStatus: http.StatusUnauthorized, wantCode: "unauthenticated"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := &introspectionFixture{active: tc.active, subject: tc.subject}
+			fixture := &introspectionFixture{active: tc.active, subject: tc.subject, role: tc.role}
 			var logs bytes.Buffer
-			authenticator, _ := newAuthenticatorFixture(t, fixture, tc.allowlist, &logs)
+			authenticator, _ := newAuthenticatorFixture(t, fixture, &logs)
 			handler := authenticator.Require(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				t.Error("protected handler ran")
 			}))
@@ -175,7 +188,7 @@ func TestRequireDistinguishesInactiveAndUnallowlistedPublishers(t *testing.T) {
 			if got := errorCode(t, response); got != tc.wantCode {
 				t.Errorf("error code = %q, want %q", got, tc.wantCode)
 			}
-			if !strings.Contains(logs.String(), tc.subject) {
+			if tc.subject != "" && !strings.Contains(logs.String(), tc.subject) {
 				t.Errorf("logs = %q, want subject %q", logs.String(), tc.subject)
 			}
 			if strings.Contains(logs.String(), "Bearer pat") || strings.Contains(logs.String(), "pat") {
@@ -186,9 +199,9 @@ func TestRequireDistinguishesInactiveAndUnallowlistedPublishers(t *testing.T) {
 }
 
 func TestRequireReturnsIDPUnavailableWhenIntrospectionCannotBeCompleted(t *testing.T) {
-	fixture := &introspectionFixture{active: true, subject: "user-123", unavailable: true}
+	fixture := &introspectionFixture{active: true, subject: "user-123", role: true, unavailable: true}
 	var logs bytes.Buffer
-	authenticator, _ := newAuthenticatorFixture(t, fixture, map[string]string{"user-123": "owner"}, &logs)
+	authenticator, _ := newAuthenticatorFixture(t, fixture, &logs)
 	handler := authenticator.Require(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("protected handler ran")
 	}))
@@ -207,9 +220,9 @@ func TestRequireReturnsIDPUnavailableWhenIntrospectionCannotBeCompleted(t *testi
 }
 
 func TestRequireUsesARecentCachedResultDuringAnIDPOutageAndExpiresIt(t *testing.T) {
-	fixture := &introspectionFixture{active: true, subject: "user-123"}
+	fixture := &introspectionFixture{active: true, subject: "user-123", role: true}
 	var logs bytes.Buffer
-	authenticator, _ := newAuthenticatorFixture(t, fixture, map[string]string{"user-123": "owner"}, &logs)
+	authenticator, _ := newAuthenticatorFixture(t, fixture, &logs)
 	currentTime := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	authenticator.introspector.now = func() time.Time { return currentTime }
 	handler := authenticator.Require(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

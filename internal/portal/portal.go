@@ -47,7 +47,7 @@ func run(ctx context.Context, configPath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	authenticator, err := auth.NewAuthenticator(cfg.ZitadelIssuerURL, cfg.HubAPIClientID, secret, cfg.Publishers, log)
+	authenticator, err := auth.NewAuthenticator(cfg.ZitadelIssuerURL, cfg.HubAPIClientID, secret, cfg.ZitadelProjectID, cfg.ZitadelAuthorizationOrgID, cfg.ZitadelPublisherRole, log)
 	if err != nil {
 		return fmt.Errorf("configure authentication: %w", err)
 	}

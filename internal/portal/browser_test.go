@@ -37,6 +37,32 @@ func TestBrowserAPIUsesOwnerIdentityAndTheSameHandlers(t *testing.T) {
 	}
 }
 
+func TestAPIPrefixesKeepBearerAndOwnerAuthenticationSeparate(t *testing.T) {
+	h := newArtifactHandler(t, newMemoryArtifactStore())
+	for _, tc := range []struct {
+		path, bearer, email, label string
+		status                     int
+	}{
+		{"/api/whoami", "test-pat", "", `"label":"owner"`, http.StatusOK},
+		{"/api/whoami", "", "owner@example.test", "", http.StatusUnauthorized},
+		{"/ui/api/whoami", "test-pat", "", "", http.StatusUnauthorized},
+		{"/ui/api/whoami", "", "owner@example.test", `"label":"owner@example.test"`, http.StatusOK},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me"+tc.path, nil)
+		if tc.bearer != "" {
+			r.Header.Set("Authorization", "Bearer "+tc.bearer)
+		}
+		if tc.email != "" {
+			r.Header.Set("X-Auth-Request-Email", tc.email)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.status || (tc.label != "" && !strings.Contains(w.Body.String(), tc.label)) {
+			t.Errorf("%s bearer=%t owner=%t: %d %s, want %d %s", tc.path, tc.bearer != "", tc.email != "", w.Code, w.Body.String(), tc.status, tc.label)
+		}
+	}
+}
+
 func TestWhoamiReportsPortalReleaseVersion(t *testing.T) {
 	previous := buildversion.Release
 	buildversion.Release = "v9.8.7"

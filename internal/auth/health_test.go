@@ -20,7 +20,7 @@ func TestIDPReachableChecksOIDCDiscovery(t *testing.T) {
 		w.WriteHeader(status)
 	}))
 	defer server.Close()
-	authenticator, err := auth.NewAuthenticator(server.URL, "client", "secret", nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	authenticator, err := auth.NewAuthenticator(server.URL, "client", "secret", "project-123", "org-456", "publisher", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
 	}

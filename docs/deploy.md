@@ -37,7 +37,7 @@ Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#z
    sudo usermod -aG pubhub nginx
    ```
 
-2. **(owner, host)** Create the config directory and install the config. Set the Zitadel issuer, `hub-api` client ID, `owner_email`, `[publishers]` entries, RGW loopback endpoint, bucket names and `pub.` base URL in `/etc/pubhub/portal.toml`. The RGW endpoint must be the loopback URL, not `s3.bdgn.me`; secrets do not belong in this file.
+2. **(owner, host)** Create the config directory and install the config. Set the Zitadel issuer, `hub-api` client ID, project ID, authorization organization ID, `zitadel_publisher_role`, `owner_email`, RGW loopback endpoint, bucket names and `pub.` base URL in `/etc/pubhub/portal.toml`. The RGW endpoint must be the loopback URL, not `s3.bdgn.me`; secrets do not belong in this file.
 
    ```sh
    sudo install -d -m 0755 /etc/pubhub
@@ -90,7 +90,7 @@ Complete the [RGW setup](#rgw-users-buckets-and-policies) and [Zitadel setup](#z
    curl -si -H "Authorization: Bearer $PAT" https://hub.bdgn.me/api/whoami
    ```
 
-   The `whoami` request returns the configured Publisher label. From outside the LAN and VPN ranges, all three requests get `403`.
+   The `whoami` request returns the current machine account name from Zitadel, falling back to `preferred_username` then its subject ID. From outside the LAN and VPN ranges, all three requests get `403`.
 
 ## Browser sign-in
 
@@ -239,14 +239,21 @@ for a synchronous publish.
 
 ## Zitadel machine-Publisher setup
 
-**(owner)** Do these steps in Zitadel before starting the Portal:
+**(owner)** Set up Zitadel before starting the Portal:
 
-1. Create the `pub-hub` project and the `hub-api` confidential application for the Portal's token-introspection requests. Record its client ID and client secret. Use the canonical Zitadel hostname for the issuer URL.
-2. Create one service account for each agent host and for the owner's CLI. Give each account a PAT with a one-year expiry, and record the account's user ID.
-3. Put each user ID in the `[publishers]` table in `portal.toml`, mapping it to the label that should appear as the Publisher. Restart the Portal after changing the allowlist.
-4. Store the `hub-api` client secret in `/etc/pubhub/credentials/hub-api-client-secret` as described above. The secret is never committed or placed in `portal.toml`.
+1. Create the `pub-hub` project and the `hub-api` confidential application for the Portal's token-introspection requests. Verify that `hub-api` belongs to this project, not another project in the instance. Record its client ID and secret, the project ID, and the ID of the authorization organization where machine grants will be assigned. Use the canonical Zitadel hostname for the issuer URL.
+2. Define the `publisher` role in that project. Grant it to each authorized machine account in the chosen authorization organization. Keep a separate service account for each agent host and the owner's CLI, with a PAT expiring in one year. The authorization organization ID is the organization on the grant, not necessarily the account's home organization or the project's owning organization.
+3. Set `zitadel_project_id`, `zitadel_authorization_org_id` and `zitadel_publisher_role = "publisher"` in `portal.toml`. Store the `hub-api` secret in `/etc/pubhub/credentials/hub-api-client-secret`, not in the TOML file or repository.
 
-The Portal sends `Authorization: Bearer <PAT>` to `/api/` and introspects the PAT through `hub-api`; agents do not need access to Zitadel. A missing or inactive PAT gets `401`, an active user absent from `[publishers]` gets `403`, and a Zitadel outage gets retryable `503`.
+The Portal introspects bearer PATs sent to `/api/` through `hub-api`; agents need no direct Zitadel access. Access requires `active: true`, a nonempty `sub`, and `publisher` under exactly `urn:zitadel:iam:org:project:<configured-project-id>:roles`, assigned in the configured authorization organization. A matching scope, audience, unqualified role, or role in another project or organization does not grant access. A missing or inactive PAT gets `401`; an active PAT without this grant gets `403`. The browser's `/ui/api/` cookie sign-in and owner checks are unchanged.
+
+Portal caches authorization and identity for at most 60 seconds. An existing PAT gains or loses access after Zitadel propagates the grant change and the cache refreshes; the total delay is **not** guaranteed to be 60 seconds or less. Once a cache entry expires, a Zitadel outage produces retryable `503`, not stale access. The name on future publications comes from introspection's `name`, then `preferred_username`, then stable `sub`. Renaming an account requires no server restart; historical `last_publisher` strings do not change.
+
+### Migrate from the machine-Publisher allowlist
+
+**(owner)** Where live compatibility checks are available, verify against the deployed Zitadel release that introspecting an already-issued PAT with `hub-api` returns the project-qualified role claim and a usable account name. Check grant and removal on the same PAT, including propagation, and check a matching role in another project and authorization organization. If claims do not update reliably, stop the migration; do not silently switch to a different lookup or authorize by `active` alone. Also check existing PAT scopes, disabled, expired or revoked accounts, and behavior after Zitadel becomes unavailable.
+
+Grant the designated role to **every existing allowlisted machine account before replacing the Portal binary**. Verify `hub-api` belongs to the configured project, set the project and authorization organization IDs in `portal.toml`, and remove `[publishers]` entirely. Then install and restart the new Portal version. An obsolete `[publishers]` table fails startup with a migration error rather than preserving the old access path. Check `/api/whoami` with an existing PAT and one without a grant. Subsequent grants, removals and renames happen in Zitadel without a Portal config edit or restart. Rollback to an allowlist-based binary requires restoring its compatible config and accounting for any grants changed since migration.
 
 ## Download a release
 
@@ -287,7 +294,7 @@ sh scripts/install-pubhub.sh          # latest release
 sh scripts/install-pubhub.sh v0.6.0   # pin or roll back to an available release
 ```
 
-On first install, when there is no `$XDG_CONFIG_HOME/pubhub/config.toml` (or `~/.config/pubhub/config.toml`), the script runs `pubhub login`. Enter the PAT from the owner's Zitadel service account; the CLI validates it through the Portal and saves it in a private `0600` config file. The account must be on the Portal's `[publishers]` allowlist. Run the installer with an interactive terminal for a hidden PAT prompt. If login fails, the verified CLI stays installed so you can retry with `~/.local/bin/pubhub login`.
+On first install, when there is no `$XDG_CONFIG_HOME/pubhub/config.toml` (or `~/.config/pubhub/config.toml`), the script runs `pubhub login`. Enter the PAT from the owner's Zitadel service account; the CLI validates it through the Portal and saves it in a private `0600` config file. The account must hold the `publisher` role in the configured Zitadel project and authorization organization. Run the installer with an interactive terminal for a hidden PAT prompt. If login fails, the verified CLI stays installed so you can retry with `~/.local/bin/pubhub login`.
 
 Subsequent runs leave credentials unchanged, even if the PAT has expired. Renew one with `pubhub login`. `PUBHUB_URL` sets the Portal URL during login; the default is `https://hub.bdgn.me`. A pinned release must include a CLI binary for your platform: `v0.5.0` has only Linux builds, so macOS needs a later release. This script installs the CLI only; upgrading the Portal still follows [Upgrade](#upgrade).
 

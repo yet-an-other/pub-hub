@@ -6,10 +6,13 @@
 # /run/pubhub; nginx reaches the socket through the pubhub group.
 socket = "/run/pubhub/portal.sock"
 
-# The canonical Zitadel issuer and the confidential hub-api application.
-# The application secret is loaded by systemd, never from this file.
+# The canonical Zitadel issuer and confidential hub-api application. hub-api
+# must belong to the project below. Its secret is loaded by systemd.
 zitadel_issuer_url = "https://zitadel.example.com"
 hub_api_client_id = "replace-with-hub-api-client-id"
+zitadel_project_id = "replace-with-pub-hub-project-id"
+zitadel_authorization_org_id = "replace-with-authorization-organization-id"
+zitadel_publisher_role = "publisher"
 owner_email = "owner@example.com"
 
 # RGW endpoint and bucket names. Use the loopback endpoint, not s3.bdgn.me.
@@ -19,7 +22,6 @@ metadata_bucket = "pubhub-meta"
 public_base_url = "https://pub.bdgn.me"
 spool_directory = "/var/cache/pubhub/spool"
 
-# Zitadel user ID -> Publisher label. Add one entry for each machine
-# Publisher (including the owner's CLI service account).
-[publishers]
-# "replace-with-zitadel-user-id" = "owner"
+# Grant each machine Publisher the role in this project and authorization
+# organization in Zitadel. Do not add a [publishers] table; obsolete tables
+# fail startup. Labels come from introspection, not this file.
