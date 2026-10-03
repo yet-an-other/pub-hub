@@ -1,18 +1,13 @@
 import { test, before, after } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { chromium } from 'playwright'
-import { createServer } from 'vite'
+import { startBrowser, stopBrowser, catalogueBody, json } from './catalogue-fixture.mjs'
 
 const publicURL = 'https://pub.example.test/demo/notes.html'
-let server, browser, origin
-
-before(async () => {
-  server = await createServer({ configFile: new URL('../vite.config.ts', import.meta.url).pathname, server: { host: '127.0.0.1', port: 0 } })
-  await server.listen()
-  origin = `http://127.0.0.1:${server.httpServer.address().port}`
-  browser = await chromium.launch({ ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}), args: ['--no-sandbox'] })
-})
-after(async () => { await browser?.close(); await server?.close() })
+const artifacts = [{ path: 'demo/notes.html', title: 'Notes', description: '', updated_at: '2025-01-01', total_size: 12, state: 'published', last_publisher: 'agent' }]
+const projects = [{ name: 'demo', description: '', artifact_count: 1 }]
+let fixture, browser
+before(async () => { fixture = await startBrowser(); browser = fixture.browser })
+after(async () => { await stopBrowser(fixture) })
 
 async function catalogue(width, failCopy = false) {
   const context = await browser.newContext({ viewport: { width, height: 800 }, permissions: ['clipboard-read', 'clipboard-write'] })
@@ -22,12 +17,9 @@ async function catalogue(width, failCopy = false) {
   })
   await page.route('**/ui/api/**', route => {
     const path = new URL(route.request().url()).pathname
-    const body = path.endsWith('/artifacts') ? [{ path: 'demo/notes.html', title: 'Notes', description: '', updated_at: '2025-01-01', total_size: 12, state: 'published', last_publisher: 'agent' }]
-      : path.endsWith('/projects') ? [{ name: 'demo', description: '', artifact_count: 1 }]
-      : path.endsWith('/config') ? { public_base_url: 'https://pub.example.test' } : { label: 'owner@example.test' }
-    return route.fulfill({ json: body })
+    return route.fulfill(json(catalogueBody(path, artifacts, projects)))
   })
-  await page.goto(origin)
+  await page.goto(fixture.origin)
   const link = page.getByRole('link', { name: 'Open demo/notes.html on the public host' })
   await link.waitFor()
   return { context, page, link, copy: page.getByRole('button', { name: 'Copy link for demo/notes.html' }) }
