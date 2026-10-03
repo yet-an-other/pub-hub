@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { existsSync } from 'node:fs'
-import { chromium } from 'playwright-core'
+import { chromium } from 'playwright'
 
 const artifact = { path: 'fixture/demo.html', url: 'https://pub.example.test/fixture/demo.html', title: 'Demo', description: '', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', last_publisher: 'fixture', total_size: 32, file_count: 1, state: 'published' }
 const projects = [{ name: 'fixture', description: '', artifact_count: 1 }]

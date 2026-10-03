@@ -103,7 +103,7 @@ function ProjectHeader({ project, changed, deleted, refresh }: { project: Projec
       <input id={`project-description-${project.name}`} type="text" value={draft} disabled={pending || confirming} onChange={e => { if (Array.from(e.target.value).length <= 1000) { setDraft(e.target.value); setFailure(null) } }} />
       <button type="submit" disabled={pending || confirming}>Save</button><button type="button" disabled={pending || confirming} onClick={() => { setDraft(project.description); setFailure(null); setEditing(false) }}>Cancel</button>
       <MutationError failure={failure} retry={() => void save()} />
-    </form> : <button className="edit-description" type="button" disabled={pending || confirming} onClick={() => { setDraft(project.description); setEditing(true) }} aria-label={`Edit ${project.name} Project description`}>{project.description || 'Add a Project description…'}</button>}</div>
+    </form> : <><p className="project-description-text">{project.description || <span className="muted">No private description</span>}</p><button className="edit-description" type="button" disabled={pending || confirming} onClick={() => { setDraft(project.description); setEditing(true) }} aria-label={`Edit description for ${project.name}`}>Edit description</button></>}</div>
     {confirming ? <div className="project-delete-confirm" role="group" aria-label={`Delete ${project.name} Project`}>
       <p><strong>{project.artifact_count} {project.artifact_count === 1 ? 'Artifact' : 'Artifacts'}</strong> (informational count). The server deletes all Project contents as they exist when accepted, including hidden, nested, Bundle, and Incomplete Artifacts. Public URLs will stop working. This removes the description and cannot be undone.</p>
       <label htmlFor={`confirm-project-${project.name}`}>Type <code>{project.name}</code> to confirm</label>
@@ -123,9 +123,19 @@ function Row({ artifact, base, changed, deleted, publish, form }: { artifact: Ar
   const [confirming, setConfirming] = useState(false)
   const [pending, setPending] = useState(false)
   const [failure, setFailure] = useState<ApiFailure | null>(null)
+  const [copyFeedback, setCopyFeedback] = useState('')
   // The URL comes from the configured public host, never the owner-facing host.
   const url = new URL(artifact.path.split('/').map(encodeURIComponent).join('/'), base + '/').href
   const name = artifact.path.replace(/\/$/, '').split('/').at(-1) + (artifact.path.endsWith('/') ? '/' : '')
+  async function copyURL() {
+    setCopyFeedback('')
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopyFeedback('URL copied to clipboard.')
+    } catch {
+      setCopyFeedback("Couldn't copy URL. Select the link to copy it manually.")
+    }
+  }
   async function save() {
     if (pending) return
     if (draft === artifact.description) { setEditing(false); setFailure(null); return }
@@ -155,7 +165,8 @@ function Row({ artifact, base, changed, deleted, publish, form }: { artifact: Ar
       <span className="row-icon"><Icon kind={artifact.path.endsWith('/') ? 'bundle' : 'file'} /></span>
       <div className="row-content">
         <div className="row-title"><strong>{artifact.title || name}</strong>{artifact.state === 'incomplete' && <span className="badge">Incomplete</span>}</div>
-        <div className="artifact-url"><a className="artifact-link" href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${artifact.path} on the public host`}>{url}</a>{' '}<button type="button" className="copy-link" aria-label={`Copy link for ${artifact.path}`} title="Copy URL" onClick={() => void navigator.clipboard.writeText(url)}><Icon kind="copy" /></button></div>
+        <div className="artifact-url"><a className="artifact-link" href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${artifact.path} on the public host`}>{url}</a>{' '}<button type="button" className="copy-link" aria-label={`Copy link for ${artifact.path}`} title="Copy URL" onClick={() => void copyURL()}><Icon kind="copy" /></button></div>
+        <span className="copy-feedback" role="status" aria-live="polite">{copyFeedback}</span>
         {editing ? <form className="description-form" onSubmit={e => { e.preventDefault(); void save() }}>
           <label htmlFor={`artifact-description-${artifact.path}`}>Artifact description</label>
           <textarea id={`artifact-description-${artifact.path}`} value={draft} disabled={pending} onChange={e => { if (Array.from(e.target.value).length <= 1000) { setDraft(e.target.value); setFailure(null) } }} />
@@ -255,7 +266,11 @@ function App() {
       {incompleteCount > 0 && <div className="notice">{incompleteCount} {incompleteCount === 1 ? 'Artifact' : 'Artifacts'} didn't finish publishing or deleting. Publish again or delete to finish.<button onClick={() => setIncomplete(true)}>Show →</button></div>}
       <div className="toolbar"><label className="search"><span>⌕</span><input ref={search} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search Projects, paths, titles, descriptions…" aria-label="Search Catalogue" /><kbd>/</kbd></label><button aria-pressed={!incomplete} onClick={() => setIncomplete(false)}>All <small>{artifacts.length}</small></button><button aria-pressed={incomplete} onClick={() => setIncomplete(true)}>Incomplete <small>{incompleteCount}</small></button><span className="spacer" /><span className="muted">{visible.length} Projects</span></div>
       {form('top')}
-      {loading ? <p role="status">Loading Catalogue…</p> : error ? <p role="alert">{error}</p> : visible.length === 0 ? <p className="empty">No matching Artifacts or Projects.</p> : <div className="inventory">{visible.map(g => <section className="project" key={g.project.name}><div className={dragged === g.project.name ? 'drop-target active' : 'drop-target'} onDragOver={e => { e.preventDefault(); setDragged(g.project.name) }} onDragLeave={() => setDragged('')} onDrop={e => void drop(e, g.project.name, g.project.name + '/')}><ProjectHeader project={g.project} changed={updated => { setProjects(existing => existing.map(p => p.name === updated.name ? updated : p)); refreshAfterMutation() }} deleted={() => { setProjects(existing => existing.filter(p => p.name !== g.project.name)); setArtifacts(existing => existing.filter(a => !a.path.startsWith(g.project.name + '/'))); refreshAfterMutation() }} refresh={refreshCatalogue} /></div>{form(g.project.name)}
+      {loading ? <p role="status">Loading Catalogue…</p> : error ? <p role="alert">{error}</p> : visible.length === 0 ? <div className="empty catalogue-empty">
+        {query.trim() ? <><p>No results for "{query.trim()}"{incomplete ? ' in Incomplete Artifacts' : ''}.</p><button type="button" onClick={() => { setQuery(''); if (incomplete) setIncomplete(false); else search.current?.focus() }}>{incomplete ? 'Clear search and show all' : 'Clear search'}</button></>
+          : incomplete ? <><p>No Incomplete Artifacts.</p><button type="button" onClick={() => setIncomplete(false)}>Show all</button></>
+          : <p>No Artifacts or Projects yet.</p>}
+      </div> : <div className="inventory">{visible.map(g => <section className="project" key={g.project.name}><div className={dragged === g.project.name ? 'drop-target active' : 'drop-target'} onDragOver={e => { e.preventDefault(); setDragged(g.project.name) }} onDragLeave={() => setDragged('')} onDrop={e => void drop(e, g.project.name, g.project.name + '/')}><ProjectHeader project={g.project} changed={updated => { setProjects(existing => existing.map(p => p.name === updated.name ? updated : p)); refreshAfterMutation() }} deleted={() => { setProjects(existing => existing.filter(p => p.name !== g.project.name)); setArtifacts(existing => existing.filter(a => !a.path.startsWith(g.project.name + '/'))); refreshAfterMutation() }} refresh={refreshCatalogue} /></div>{form(g.project.name)}
         {!g.artifacts.length && !g.categories.length && <p className="empty">No Artifacts yet</p>}
         {g.artifacts.map(a => <Row artifact={a} base={base} key={a.path} changed={artifactChanged} deleted={artifactDeleted} publish={() => openPublish(a.path, a.path, true)} form={form(a.path)} />)}
         {g.categories.map(c => <div className="category-group" key={c.name}><h3 className={dragged === g.project.name + '/' + c.name ? 'category drop-target active' : 'category drop-target'} onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragged(g.project.name + '/' + c.name) }} onDragLeave={e => { e.stopPropagation(); setDragged('') }} onDrop={e => { e.stopPropagation(); void drop(e, g.project.name + '/' + c.name, g.project.name + '/' + c.name + '/') }}>{c.name}/</h3>{form(g.project.name + '/' + c.name)}{c.artifacts.map(a => <Row artifact={a} base={base} key={a.path} changed={artifactChanged} deleted={artifactDeleted} publish={() => openPublish(a.path, a.path, true)} form={form(a.path)} />)}</div>)}
