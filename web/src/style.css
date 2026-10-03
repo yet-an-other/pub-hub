@@ -31,11 +31,12 @@ h1 { font-size: clamp(27px, 4vw, 38px); letter-spacing: -.045em; font-weight: 65
 .toolbar { display: flex; gap: 12px; align-items: center; margin: 24px 0 16px; font-size: 14px; flex-wrap: wrap }
 .toolbar > button { padding: 7px 10px; color: #78716c; border-radius: 6px }
 .toolbar > button[aria-pressed=true] { color: #173a2c; background: #eef4ef; border: 1px solid #dce9df }
-.toolbar small { color: #a8a29e; margin-left: 4px }
+.toolbar small { color: #57534e; margin-left: 4px }
+.toolbar > button[aria-pressed=true] small { color: #435e4b }
 .search { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: white; border: 1px solid #e4e6df; border-radius: 8px; width: min(100%, 420px) }
 .search:focus-within { border-color: #2f6b50 }
 .search input { flex: 1; min-width: 0; outline: 0; font-size: 14px }
-kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 4px }
+kbd { color: #78716c; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 4px }
 
 .inventory { border: 1px solid #e4e6df; border-radius: 12px; background: white; overflow: hidden }
 .project + .project { border-top: 1px solid #e4e6df }
@@ -96,6 +97,10 @@ kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 .mutation-error { color: #991b1b; font-size: 13px; overflow-wrap: anywhere }
 .mutation-error button { color: #991b1b; text-decoration: underline }
 .empty { padding: 18px 56px; color: #78716c; font-size: 14px }
+.catalogue-empty { border: 1px solid #e4e6df; border-radius: 8px; background: white; color: #57534e }
+.catalogue-empty p { margin: 0 0 8px }
+.catalogue-empty p:last-child { margin-bottom: 0 }
+.catalogue-empty button { color: #245a43; text-decoration: underline; text-underline-offset: 3px; font-weight: 600 }
 
 .publish-actions button:first-child { background: #245a43; color: white; padding: 9px 18px; border-radius: 6px }
 .publish-form { padding: 20px; margin: 12px 24px; border: 1px solid #dce9df; background: #eef4ef80; border-radius: 8px; display: grid; gap: 12px; font-size: 14px }
