@@ -24,7 +24,7 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: cd web && npm ci && npm test && npm run build
+      - run: cd web && npm ci && npx playwright install --with-deps chromium && npm test && npm run build
       - run: go vet ./...
       - name: Install nginx for Reader integration checks
         run: sudo apt-get update && sudo apt-get install -y nginx
