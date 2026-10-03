@@ -201,6 +201,7 @@ function App() {
   const [incomplete, setIncomplete] = useState(false)
   const [publishing, setPublishing] = useState<{ slot: string; initial: string; fixed: boolean; selection?: Dropped; id: number } | null>(null)
   const [dragged, setDragged] = useState('')
+  const publishOpener = useRef<HTMLElement | null>(null)
   const search = useRef<HTMLInputElement>(null)
   async function refreshCatalogue() {
     try {
@@ -223,7 +224,13 @@ function App() {
     refreshAfterMutation()
   }
   function openPublish(slot: string, initial: string, fixed = false, selection?: Dropped) {
+    publishOpener.current = !selection && document.activeElement instanceof HTMLButtonElement ? document.activeElement : null
     setPublishing({ slot, initial, fixed, selection, id: Date.now() + Math.random() })
+  }
+  function closePublish() {
+    setPublishing(null)
+    const opener = publishOpener.current
+    requestAnimationFrame(() => { if (opener?.isConnected) opener.focus() })
   }
   async function drop(e: React.DragEvent, slot: string, prefix: string) {
     e.preventDefault(); setDragged('')
@@ -231,7 +238,7 @@ function App() {
     catch (error) { setRefreshError(error instanceof Error ? error.message : String(error)) }
   }
   function form(slot: string) {
-    return publishing?.slot === slot && <PublishForm key={publishing.id} initial={publishing.initial} fixed={publishing.fixed} selection={publishing.selection} existing={artifacts} base={base} done={published} close={() => setPublishing(null)} />
+    return publishing?.slot === slot && <PublishForm key={publishing.id} initial={publishing.initial} fixed={publishing.fixed} selection={publishing.selection} existing={artifacts} base={base} done={published} close={closePublish} />
   }
   function artifactDeleted(path: string) {
     setArtifacts(existing => existing.filter(item => item.path !== path))
