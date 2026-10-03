@@ -150,7 +150,7 @@ function Row({ artifact, base, changed, deleted, publish, form }: { artifact: Ar
     } catch (error) { setFailure(failureOf(error)) }
     finally { setPending(false) }
   }
-  return <div className="row">
+  return <div className="row" id={'catalogue-artifact-' + encodeURIComponent(artifact.path)}>
     <div className="row-main">
       <span className="row-icon"><Icon kind={artifact.path.endsWith('/') ? 'bundle' : 'file'} /></span>
       <div className="row-content">
@@ -189,6 +189,7 @@ function App() {
   const [query, setQuery] = useState('')
   const [incomplete, setIncomplete] = useState(false)
   const [publishing, setPublishing] = useState<{ slot: string; initial: string; fixed: boolean; selection?: Dropped; id: number } | null>(null)
+  const [publishedArtifact, setPublishedArtifact] = useState<Artifact | null>(null)
   const [dragged, setDragged] = useState('')
   const search = useRef<HTMLInputElement>(null)
   async function refreshCatalogue() {
@@ -208,10 +209,17 @@ function App() {
   }
   function published(artifact: Artifact) {
     setPublishing(null)
+    setPublishedArtifact(artifact)
     setArtifacts(existing => [...existing.filter(a => a.path !== artifact.path), artifact])
     refreshAfterMutation()
   }
+  function showPublished() {
+    if (!publishedArtifact) return
+    setQuery(''); setIncomplete(false)
+    requestAnimationFrame(() => document.getElementById('catalogue-artifact-' + encodeURIComponent(publishedArtifact.path))?.scrollIntoView())
+  }
   function openPublish(slot: string, initial: string, fixed = false, selection?: Dropped) {
+    setPublishedArtifact(null)
     setPublishing({ slot, initial, fixed, selection, id: Date.now() + Math.random() })
   }
   async function drop(e: React.DragEvent, slot: string, prefix: string) {
@@ -242,6 +250,7 @@ function App() {
   const visible = groups(projects, artifacts, query, incomplete)
   return <><header className="top"><div className="top-inner"><span className="mark">p</span><b>pub-hub</b><span className="muted">♙ Private Catalogue</span><span className="spacer" /><span className="muted">{size(artifacts.reduce((sum, a) => sum + a.total_size, 0))} in {artifacts.length} Artifacts</span><span className="divider" /><span className="email">{email}</span><a href="/oauth2/sign_out">Sign out</a></div></header>
     <main><div className="hero"><div><span className="eyebrow">Catalogue</span><h1>Published Artifacts <span className="count">{artifacts.length}</span></h1><p className="muted">Public at {base ? new URL(base).host : 'pub.'}, never indexed or listed.</p></div><div className="hero-actions"><button type="button" className="publish-button" onClick={() => openPublish('top', '')}>Publish</button><span className="muted private">♙ Descriptions are private</span></div></div>
+      {publishedArtifact && <div className="publish-confirmation" role="status" aria-label="Artifact published"><strong>Artifact published.</strong> <a href={publishedArtifact.url} target="_blank" rel="noopener noreferrer">{publishedArtifact.url}</a> <button type="button" onClick={showPublished}>Show in Catalogue</button><button type="button" onClick={() => setPublishedArtifact(null)} aria-label="Dismiss publish confirmation">Dismiss</button></div>}
       {refreshError && <p role="alert" className="mutation-error">Could not refresh Catalogue: {refreshError} <button type="button" onClick={() => refreshAfterMutation()}>Retry</button></p>}
       {incompleteCount > 0 && <div className="notice">{incompleteCount} {incompleteCount === 1 ? 'Artifact' : 'Artifacts'} didn't finish publishing or deleting. Publish again or delete to finish.<button onClick={() => setIncomplete(true)}>Show →</button></div>}
       <div className="toolbar"><label className="search"><span>⌕</span><input ref={search} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search Projects, paths, titles, descriptions…" aria-label="Search Catalogue" /><kbd>/</kbd></label><button aria-pressed={!incomplete} onClick={() => setIncomplete(false)}>All <small>{artifacts.length}</small></button><button aria-pressed={incomplete} onClick={() => setIncomplete(true)}>Incomplete <small>{incompleteCount}</small></button><span className="spacer" /><span className="muted">{visible.length} Projects</span></div>
