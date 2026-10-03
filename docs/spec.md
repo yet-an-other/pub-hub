@@ -436,8 +436,8 @@ The Catalogue is the Portal SPA at `hub.bdgn.me/`, calling the API under `/ui/ap
 
 ### 7.1 Page
 
-- A top bar with the pub-hub mark, "Private Catalogue", the total size and Artifact count, the signed-in administrator's email, and Sign out (`/oauth2/sign_out`).
-- A heading "Published Artifacts" with the count, a **Publish** button, and the note "Descriptions are private".
+- A top bar with the pub-hub mark, "Private Catalogue", the total size and Artifact count, the signed-in administrator's name or email, and Sign out (`/oauth2/sign_out`).
+- A heading "Published Artifacts" with the count and a **Publish** button.
 - An incomplete banner when any Artifact is `incomplete`. Its "Show" link switches the filter to Incomplete.
 - Search with a `/` shortcut, covering Projects, paths, titles, descriptions and Publishers, plus **All / Incomplete** filter buttons.
 
