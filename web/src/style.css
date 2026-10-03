@@ -11,7 +11,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 
 .top { background: white; border-bottom: 1px solid #e4e6df }
 .top-inner { max-width: 1152px; margin: auto; padding: 14px 32px; display: flex; align-items: center; gap: 16px; font-size: 14px; flex-wrap: wrap }
-.top-inner b { font-size: 19px; letter-spacing: -.04em }
+.top-inner b { font: 700 20px Georgia, "Times New Roman", serif; letter-spacing: -.025em }
 .mark { width: 32px; height: 32px; display: grid; place-items: center; background: #245a43; color: white; border-radius: 8px; font: 24px Georgia, serif }
 .divider { height: 20px; border-left: 1px solid #e4e6df }
 .email { color: #57534e }
@@ -20,8 +20,8 @@ main { max-width: 1152px; margin: 0 auto; padding: 40px 32px 100px }
 .hero { display: flex; align-items: end; gap: 16px }
 .hero-actions { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 12px }
 .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #245a43; font-weight: 700 }
-h1 { font-size: clamp(27px, 4vw, 38px); letter-spacing: -.045em; font-weight: 650; margin: 8px 0 }
-.count { border: 1px solid #e4e6df; background: white; color: #78716c; font-size: 14px; padding: 2px 8px; border-radius: 6px; vertical-align: middle; letter-spacing: 0 }
+h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(29px, 4vw, 38px); line-height: 1.2; letter-spacing: -.025em; font-weight: 700; margin: 8px 0 }
+.count { border: 1px solid #e4e6df; background: white; color: #78716c; font: 500 14px Inter, ui-sans-serif, system-ui, sans-serif; padding: 2px 8px; border-radius: 6px; vertical-align: middle; letter-spacing: 0 }
 .hero p { font-size: 14px; margin: 8px 0 0 }
 .private { font-size: 12px; white-space: nowrap }
 .publish-button { background: #245a43; color: white; padding: 9px 18px; border-radius: 6px; font-size: 14px }
@@ -44,7 +44,7 @@ kbd { color: #78716c; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 .project-head > svg { color: #78716c; flex: none; margin-top: 3px }
 .project-info { flex: 1; min-width: 0 }
 .project-name { display: flex; align-items: baseline; gap: 8px }
-.project-name h2 { font-size: 16px; font-weight: 650; margin: 0 }
+.project-name h2 { font: 700 17px Georgia, "Times New Roman", serif; letter-spacing: -.015em; margin: 0 }
 .project-name code { font-size: 12px; color: #78716c }
 .project-count { margin-left: auto; font-size: 12px; color: #78716c; white-space: nowrap }
 .project-description { font-size: 14px; color: #57534e }
