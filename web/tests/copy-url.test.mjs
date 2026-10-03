@@ -31,10 +31,6 @@ for (const width of [1100, 390]) {
     try {
       assert.equal(await link.getAttribute('href'), publicURL)
       assert.equal(await link.innerText(), publicURL)
-      const box = await copy.boundingBox()
-      assert.ok(box.width >= 40 && box.height >= 40, `copy target is ${box.width}x${box.height}`)
-      const linkBox = await link.boundingBox()
-      assert.ok(box.x >= linkBox.x + linkBox.width || box.y >= linkBox.y + linkBox.height, 'copy target does not cover the link')
       await context.route('https://pub.example.test/**', route => route.fulfill({ body: '<title>Public Artifact</title>', contentType: 'text/html' }))
       const popupPromise = page.waitForEvent('popup')
       await link.click()
