@@ -24,10 +24,10 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Install Chromium for Catalogue browser tests and nginx for Reader checks
+        run: sudo apt-get update && sudo apt-get install -y chromium nginx
       - run: cd web && npm ci && npm test && npm run build
       - run: go vet ./...
-      - name: Install nginx for Reader integration checks
-        run: sudo apt-get update && sudo apt-get install -y nginx
       - name: Start local S3-compatible server
         # MinIO RELEASE.2025-04-22T22-12-26Z, rebuilt from source by coollabsio.
         # Docker Hub no longer serves minio/minio; pin the mirror by digest.
