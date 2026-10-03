@@ -123,9 +123,19 @@ function Row({ artifact, base, changed, deleted, publish, form }: { artifact: Ar
   const [confirming, setConfirming] = useState(false)
   const [pending, setPending] = useState(false)
   const [failure, setFailure] = useState<ApiFailure | null>(null)
+  const [copyFeedback, setCopyFeedback] = useState('')
   // The URL comes from the configured public host, never the owner-facing host.
   const url = new URL(artifact.path.split('/').map(encodeURIComponent).join('/'), base + '/').href
   const name = artifact.path.replace(/\/$/, '').split('/').at(-1) + (artifact.path.endsWith('/') ? '/' : '')
+  async function copyURL() {
+    setCopyFeedback('')
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopyFeedback('URL copied to clipboard.')
+    } catch {
+      setCopyFeedback("Couldn't copy URL. Select the link to copy it manually.")
+    }
+  }
   async function save() {
     if (pending) return
     if (draft === artifact.description) { setEditing(false); setFailure(null); return }
@@ -155,7 +165,8 @@ function Row({ artifact, base, changed, deleted, publish, form }: { artifact: Ar
       <span className="row-icon"><Icon kind={artifact.path.endsWith('/') ? 'bundle' : 'file'} /></span>
       <div className="row-content">
         <div className="row-title"><strong>{artifact.title || name}</strong>{artifact.state === 'incomplete' && <span className="badge">Incomplete</span>}</div>
-        <div className="artifact-url"><a className="artifact-link" href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${artifact.path} on the public host`}>{url}</a>{' '}<button type="button" className="copy-link" aria-label={`Copy link for ${artifact.path}`} title="Copy URL" onClick={() => void navigator.clipboard.writeText(url)}><Icon kind="copy" /></button></div>
+        <div className="artifact-url"><a className="artifact-link" href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${artifact.path} on the public host`}>{url}</a>{' '}<button type="button" className="copy-link" aria-label={`Copy link for ${artifact.path}`} title="Copy URL" onClick={() => void copyURL()}><Icon kind="copy" /></button></div>
+        <span className="copy-feedback" role="status" aria-live="polite">{copyFeedback}</span>
         {editing ? <form className="description-form" onSubmit={e => { e.preventDefault(); void save() }}>
           <label htmlFor={`artifact-description-${artifact.path}`}>Artifact description</label>
           <textarea id={`artifact-description-${artifact.path}`} value={draft} disabled={pending} onChange={e => { if (Array.from(e.target.value).length <= 1000) { setDraft(e.target.value); setFailure(null) } }} />
