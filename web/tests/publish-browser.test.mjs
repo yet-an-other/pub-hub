@@ -51,6 +51,24 @@ async function submit(page) {
   await page.locator('.publish-form button[type=submit]').click()
 }
 
+test('transfer progress does not announce publication before the server response', async t => {
+  const page = await pageWithFixture(t)
+  await page.evaluate(() => {
+    window.publishMessages = []
+    new MutationObserver(() => {
+      const progress = document.querySelector('.publish-form [role=status]')
+      const success = document.querySelector('.publish-confirmation')
+      if (progress) window.publishMessages.push(progress.textContent)
+      if (success) window.publishMessages.push(success.textContent)
+    }).observe(document.querySelector('main'), { subtree: true, childList: true, characterData: true })
+  })
+  await submit(page)
+  await page.getByRole('status', { name: /Artifact published/i }).waitFor()
+  const messages = await page.evaluate(() => window.publishMessages)
+  assert.ok(messages.some(message => message.includes('Publication finishes after the server responds') || message.includes('Waiting for server to finish publishing')), messages.join('\n'))
+  assert.ok(messages.indexOf(messages.find(message => message.includes('Artifact published.'))) > 0)
+})
+
 test('server failure keeps the form open with a retry and no success confirmation', async t => {
   const page = await pageWithFixture(t, { publish: { status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'storage_unavailable', message: 'Storage is unavailable' } }) } })
   await submit(page)
