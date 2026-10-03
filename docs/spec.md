@@ -232,7 +232,7 @@ Browser authorization and identity are cached for at most 60 s, or until the acc
 ### 4.5 Authorisation and identity
 
 - Every authenticated Publisher has full rights: publish, replace, delete and edit descriptions, anywhere. There are no per-credential scopes ([ADR 0004], [#7]).
-- The **Publisher label**, recorded as "last Publisher", is introspection's current `name` for a machine Publisher, falling back to `preferred_username` and then stable `sub`; for a publish from the Catalogue it is that Portal administrator's signed-in email ([#7], [#35], [ADR 0005]). New publishes take the name after cache refresh. Existing `last_publisher` strings stay unchanged after an account rename.
+- The **Publisher label**, recorded as "last Publisher", is introspection's current `name` for a machine Publisher, falling back to `preferred_username` and then stable `sub`; for a publish from the Catalogue it is that Portal administrator's signed-in email when available, otherwise their name or the introspected label ([#7], [#35], [ADR 0005]). New publishes take the name after cache refresh. Existing `last_publisher` strings stay unchanged after an account rename.
 - `GET /api/whoami` returns the caller's label and Portal version ([#8]).
 
 ## 5. Storage and serving

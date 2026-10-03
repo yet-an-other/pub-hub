@@ -257,10 +257,14 @@ func (a *application) apiRoutes(w http.ResponseWriter, r *http.Request) {
 			auth.WriteError(w, http.StatusInternalServerError, "internal_error", "publisher identity unavailable")
 			return
 		}
+		label := publisher.Label
+		if publisher.DisplayLabel != "" {
+			label = publisher.DisplayLabel
+		}
 		writeJSON(w, http.StatusOK, struct {
 			Label         string `json:"label"`
 			PortalVersion string `json:"portal_version"`
-		}{Label: publisher.Label, PortalVersion: buildversion.Current()})
+		}{Label: label, PortalVersion: buildversion.Current()})
 		return
 	}
 	if path == "/config" {

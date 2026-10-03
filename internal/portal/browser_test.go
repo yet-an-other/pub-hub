@@ -26,8 +26,8 @@ func TestBrowserAPIUsesAdministratorRoleAndTheSameHandlers(t *testing.T) {
 		label       string
 	}{
 		{"/ui/api/whoami", "", 401, ""},
-		{"/ui/api/whoami", "other@example.test", 200, `"label":"other@example.test","portal_version":"`},
-		{"/ui/api/whoami", "owner@example.test", 200, `"label":"owner@example.test","portal_version":"`},
+		{"/ui/api/whoami", "other@example.test", 200, `"label":"owner","portal_version":"`},
+		{"/ui/api/whoami", "owner@example.test", 200, `"label":"owner","portal_version":"`},
 		{"/ui/api/artifacts", "owner@example.test", 200, `[]`},
 	} {
 		r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me"+tc.path, nil)
@@ -55,7 +55,7 @@ func TestAPIPrefixesKeepBearerAndBrowserAuthenticationSeparate(t *testing.T) {
 		{"/api/whoami", "test-pat", "", `"label":"owner"`, http.StatusOK},
 		{"/api/whoami", "", "owner@example.test", "", http.StatusUnauthorized},
 		{"/ui/api/whoami", "test-pat", "", "", http.StatusUnauthorized},
-		{"/ui/api/whoami", "", "owner@example.test", `"label":"owner@example.test"`, http.StatusOK},
+		{"/ui/api/whoami", "", "owner@example.test", `"label":"owner"`, http.StatusOK},
 	} {
 		r := httptest.NewRequest(http.MethodGet, "https://hub.bdgn.me"+tc.path, nil)
 		if tc.bearer != "" {
@@ -79,7 +79,7 @@ func TestWhoamiReportsPortalReleaseVersion(t *testing.T) {
 	setBrowserSession(r, "owner@example.test")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"label":"owner@example.test","portal_version":"v9.8.7"`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"label":"owner","portal_version":"v9.8.7"`) {
 		t.Fatalf("whoami = %d: %s", w.Code, w.Body.String())
 	}
 }

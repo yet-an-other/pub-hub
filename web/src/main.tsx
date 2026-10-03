@@ -103,18 +103,18 @@ function ProjectHeader({ project, changed, deleted, refresh }: { project: Projec
       <input id={`project-description-${project.name}`} type="text" value={draft} disabled={pending || confirming} onChange={e => { if (Array.from(e.target.value).length <= 1000) { setDraft(e.target.value); setFailure(null) } }} />
       <button type="submit" disabled={pending || confirming}>Save</button><button type="button" disabled={pending || confirming} onClick={() => { setDraft(project.description); setFailure(null); setEditing(false) }}>Cancel</button>
       <MutationError failure={failure} retry={() => void save()} />
-    </form> : <><p className="project-description-text">{project.description || <span className="muted">No private description</span>}</p><button className="edit-description" type="button" disabled={pending || confirming} onClick={() => { setDraft(project.description); setEditing(true) }} aria-label={`Edit description for ${project.name}`}>Edit description</button></>}</div>
-    {confirming ? <div className="project-delete-confirm" role="group" aria-label={`Delete ${project.name} Project`}>
+    </form> : <p className="project-description-text">{project.description || <span className="muted">No private description</span>}</p>}</div>
+    </div><div className="project-actions">{!editing && !confirming && <button type="button" disabled={pending} onClick={() => { setDraft(project.description); setEditing(true) }} aria-label={`Edit description for ${project.name}`}>Edit</button>}
+    {!confirming && <button className="project-delete-button danger" type="button" disabled={pending || editing} onClick={() => { setConfirming(true); setConfirmation(''); setFailure(null); setEditing(false) }}>Delete Project</button>}</div>
+    {confirming && <div className="project-delete-confirm" role="group" aria-label={`Delete ${project.name} Project`}>
       <p><strong>{project.artifact_count} {project.artifact_count === 1 ? 'Artifact' : 'Artifacts'}</strong> (informational count). The server deletes all Project contents as they exist when accepted, including hidden, nested, Bundle, and Incomplete Artifacts. Public URLs will stop working. This removes the description and cannot be undone.</p>
       <label htmlFor={`confirm-project-${project.name}`}>Type <code>{project.name}</code> to confirm</label>
       <input id={`confirm-project-${project.name}`} value={confirmation} disabled={pending} onChange={e => setConfirmation(e.target.value)} autoComplete="off" />
       <button className="danger" type="button" disabled={pending || !projectNameMatches(project.name, confirmation)} onClick={() => void remove()}>Delete Project</button>
       <button type="button" disabled={pending} onClick={() => { setConfirming(false); setConfirmation(''); setFailure(null) }}>Cancel</button>
-    </div> : <>
-      <button className="project-delete-button danger" type="button" disabled={pending || editing} onClick={() => { setConfirming(true); setConfirmation(''); setFailure(null); setEditing(false) }}>Delete Project</button>
-      {failure && <p className="mutation-error" role="alert">{failure.code}: {failure.message} <button type="button" disabled={pending} onClick={() => void retryDelete()}>Retry</button></p>}
-    </>}
-  </div></div>
+    </div>}
+    {!confirming && failure && <p className="mutation-error" role="alert">{failure.code}: {failure.message} <button type="button" disabled={pending} onClick={() => void retryDelete()}>Retry</button></p>}
+  </div>
 }
 
 function Row({ artifact, base, changed, deleted, publish, form }: { artifact: Artifact; base: string; changed: (artifact: Artifact) => void; deleted: (path: string) => void; publish: () => void; form: React.ReactNode }) {
@@ -176,7 +176,7 @@ function Row({ artifact, base, changed, deleted, publish, form }: { artifact: Ar
         {artifact.state === 'incomplete' && <p className="warning">The last publish or delete didn't finish. Readers may see mixed files or 404s. Publish again or delete to finish.</p>}
         <MutationError failure={failure} retry={() => void (confirming ? remove() : save())} />
       </div>
-      <div className="row-meta"><time dateTime={artifact.updated_at} title="Last published">{shortDate(artifact.updated_at)}</time><span>{size(artifact.total_size)}</span></div>
+      <div className="row-meta"><time dateTime={artifact.updated_at} title="Last published">{shortDate(artifact.updated_at)}</time><span>{size(artifact.total_size)}</span><span title="Last publisher">{artifact.last_publisher}</span></div>
       <div className="row-actions">
         {confirming ? <div className="delete-confirm"><p>Readers get 404 at once; there is no undo.</p><button className="danger" type="button" disabled={pending} onClick={() => void remove()}>Confirm delete</button><button type="button" disabled={pending} onClick={() => { setConfirming(false); setFailure(null) }}>Cancel</button></div> : <>
           <button type="button" disabled={pending || editing} onClick={() => { setDraft(artifact.description); setEditing(true); setFailure(null) }} aria-label={`Edit description for ${artifact.path}`}>Edit</button>

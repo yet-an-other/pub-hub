@@ -28,6 +28,8 @@ type introspectionResult struct {
 	Active    bool
 	Subject   string
 	Label     string
+	Name      string
+	Email     string
 	Roles     map[string]bool
 	ExpiresAt time.Time
 }
@@ -152,6 +154,8 @@ func (i *Introspector) request(ctx context.Context, token string) (introspection
 	}
 	var name, username string
 	_ = json.Unmarshal(claims["name"], &name)
+	_ = json.Unmarshal(claims["email"], &result.Email)
+	result.Name = strings.TrimSpace(name)
 	_ = json.Unmarshal(claims["preferred_username"], &username)
 	result.Label = result.Subject
 	if strings.TrimSpace(username) != "" {
@@ -194,8 +198,9 @@ func (i *Introspector) reachable(ctx context.Context) bool {
 
 // Publisher is the authenticated machine Publisher identity.
 type Publisher struct {
-	Subject string
-	Label   string
+	Subject      string
+	Label        string
+	DisplayLabel string
 }
 
 type publisherContextKey struct{}
@@ -264,7 +269,28 @@ func (a *Authenticator) RequireAdmin(next http.Handler) http.Handler {
 			WriteError(w, http.StatusForbidden, "forbidden", "Portal administrator role required")
 			return
 		}
-		publisher := Publisher{Subject: subject, Label: email}
+		// Prefer a person's name, then an actual email address. Some OIDC
+		// sessions put the opaque subject in oauth2-proxy's email header.
+		label := result.Name
+		if label == subject {
+			label = ""
+		}
+		if label == "" && strings.Contains(result.Email, "@") {
+			label = result.Email
+		}
+		if label == "" && strings.Contains(email, "@") {
+			label = email
+		}
+		displayLabel := label
+		if displayLabel == "" {
+			displayLabel = "Administrator"
+		}
+		if strings.Contains(email, "@") {
+			label = email // Preserve the browser Publisher label for existing accounts.
+		} else if label == "" {
+			label = result.Label // Keep a unique audit label if no readable claim exists.
+		}
+		publisher := Publisher{Subject: subject, Label: label, DisplayLabel: displayLabel}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), publisherContextKey{}, publisher)))
 	})
 }

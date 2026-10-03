@@ -53,9 +53,11 @@ kbd { color: #78716c; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 .project-count { margin-left: auto; font-size: 12px; color: #78716c; white-space: nowrap }
 .project-description { font-size: 14px; color: #57534e }
 .project-description-text { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere }
-.project-description > .edit-description { display: inline-block; padding: 4px 0; font-size: 12px; text-decoration: underline; text-underline-offset: 2px }
 .project-description form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px }
-.project-delete-button { margin-left: 12px; padding: 5px 8px; border: 1px solid #fecaca; border-radius: 5px; background: white; color: #991b1b; font-size: 12px; white-space: nowrap }
+.project-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px }
+.project-actions > button { width: 96px; padding: 5px 8px; border: 1px solid #d6d3d1; border-radius: 5px; background: white; font-size: 12px; white-space: nowrap }
+.project-actions > button:disabled { opacity: .5; cursor: default }
+.project-actions > .danger { color: #991b1b; border-color: #fecaca }
 .project-delete-confirm { flex-basis: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 10px; border: 1px solid #fecaca; border-radius: 6px; background: #fef2f2; font-size: 12px }
 .project-delete-confirm p { grid-column: 1 / -1; margin: 0; color: #7f1d1d }
 .project-delete-confirm label { grid-column: 1 / -1 }
@@ -84,7 +86,7 @@ kbd { color: #78716c; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 .copy-feedback:not(:empty) { display: block; margin-top: 2px; color: #57534e; font-size: 12px }
 .description { margin: 6px 0 0; color: #57534e; white-space: pre-wrap; overflow-wrap: anywhere }
 .badge { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; padding: 2px 6px; border-radius: 5px; font-size: 11px; white-space: nowrap }
-.row-meta { display: flex; flex-direction: column; gap: 4px; color: #78716c; font-size: 12px; text-align: right; white-space: nowrap }
+.row-meta { display: flex; flex-direction: column; gap: 4px; color: #78716c; font-size: 12px; text-align: right; overflow-wrap: anywhere }
 .row-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px }
 .row-actions > button { width: 96px }
 .row-actions button, .description-form button, .project-description form button { padding: 5px 8px; border: 1px solid #d6d3d1; border-radius: 5px; background: white; font-size: 12px; white-space: nowrap }
@@ -98,8 +100,6 @@ kbd { color: #78716c; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 .description-form label, .description-form textarea { width: 100% }
 .description-form textarea { min-height: 80px; padding: 8px; border: 1px solid #a8a29e; border-radius: 4px; resize: vertical }
 .warning { color: #92400e; background: #fffbeb; padding: 10px; border-radius: 6px }
-.edit-description { text-align: left; color: #57534e; padding: 4px 0; overflow-wrap: anywhere }
-.edit-description:hover { color: #245a43; text-decoration: underline }
 .mutation-error { color: #991b1b; font-size: 13px; overflow-wrap: anywhere }
 .mutation-error button { color: #991b1b; text-decoration: underline }
 .empty { padding: 18px 56px; color: #78716c; font-size: 14px }

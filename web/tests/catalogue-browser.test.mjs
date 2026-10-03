@@ -16,6 +16,23 @@ async function catalogue(page, artifacts, projects = [{ name: 'alpha', descripti
 const sample = [{ path: 'alpha/guide.html', title: 'Guide', description: '', state: 'published', total_size: 12, updated_at: '2025-01-01T00:00:00Z', last_publisher: 'owner' }]
 
 // Browser-visible Catalogue seam: safe, read-only API fixtures; no live Portal or Artifact host.
+test('Project actions align right and Artifact rows show the last publisher', async () => {
+  for (const width of [390, 1200]) {
+    const page = await browser.newPage({ viewport: { width, height: 800 } })
+    try {
+      await catalogue(page, [{ ...sample[0], last_publisher: 'Ada Lovelace' }])
+      const project = page.locator('.project')
+      const edit = project.getByRole('button', { name: 'Edit description for alpha', exact: true })
+      const remove = project.getByRole('button', { name: 'Delete Project' })
+      const [editBox, removeBox] = await Promise.all([edit.boundingBox(), remove.boundingBox()])
+      assert.equal(editBox.x + editBox.width, removeBox.x + removeBox.width)
+      assert.ok(editBox.y + editBox.height <= removeBox.y)
+      assert.equal(await project.locator('.row-meta').getByText('Ada Lovelace').isVisible(), true)
+      assert.equal(await page.locator('.top .email').innerText(), 'owner@example.test')
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    } finally { await page.close() }
+  }
+})
 test('empty Incomplete filter explains zero and keyboard Show all restores the list at narrow and wide widths', async () => {
   for (const width of [390, 1200]) {
     const page = await browser.newPage({ viewport: { width, height: 800 } })

@@ -58,6 +58,32 @@ func TestRequireAdminNeedsTheSessionTokenAndMatchingSubject(t *testing.T) {
 	}
 }
 
+func TestRequireAdminUsesReadableIdentityWhenProxyEmailIsSubject(t *testing.T) {
+	for _, tc := range []struct {
+		name, claims, label, display string
+	}{
+		{"name", `"name":"Ada Lovelace"`, "Ada Lovelace", "Ada Lovelace"},
+		{"email", `"email":"ada@example.test"`, "ada@example.test", "ada@example.test"},
+		{"name is subject", `"name":"human-123"`, "human-123", "Administrator"},
+		{"missing claims", `"preferred_username":"human-123"`, "human-123", "Administrator"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := &introspectionFixture{response: `{"active":true,"sub":"human-123",` + tc.claims + `,"urn:zitadel:iam:org:project:project-123:roles":{"hub-admin":{"org-456":"example.test"}}}`}
+			var logs bytes.Buffer
+			a, _ := newAuthenticatorFixture(t, fixture, &logs)
+			handler := a.RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				p, _ := PublisherFromContext(r.Context())
+				if p.Label != tc.label || p.DisplayLabel != tc.display {
+					t.Errorf("identity = %+v, want %q / %q", p, tc.label, tc.display)
+				}
+			}))
+			if w := adminRequest(handler, "human-123", "human-123", "browser-token"); w.Code != 200 {
+				t.Errorf("status = %d", w.Code)
+			}
+		})
+	}
+}
+
 func TestRequireAdminOnlyAcceptsTheProjectQualifiedRoleInAnyOrganization(t *testing.T) {
 	for _, tc := range []struct {
 		name, claims string
