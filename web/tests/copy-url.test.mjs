@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { chromium } from 'playwright-core'
+import { chromium } from 'playwright'
 import { createServer } from 'vite'
 
 const publicURL = 'https://pub.example.test/demo/notes.html'
@@ -10,7 +10,7 @@ before(async () => {
   server = await createServer({ configFile: new URL('../vite.config.ts', import.meta.url).pathname, server: { host: '127.0.0.1', port: 0 } })
   await server.listen()
   origin = `http://127.0.0.1:${server.httpServer.address().port}`
-  browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox'] })
+  browser = await chromium.launch({ ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}), args: ['--no-sandbox'] })
 })
 after(async () => { await browser?.close(); await server?.close() })
 
