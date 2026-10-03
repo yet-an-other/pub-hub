@@ -1,29 +1,12 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { spawn } from 'node:child_process'
-import { createServer } from 'node:net'
-import { existsSync } from 'node:fs'
-import { chromium } from 'playwright'
+import { startBrowser, stopBrowser, catalogueBody, json } from './catalogue-fixture.mjs'
 
 const artifact = { path: 'fixture/demo.html', url: 'https://pub.example.test/fixture/demo.html', title: 'Demo', description: '', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', last_publisher: 'fixture', total_size: 32, file_count: 1, state: 'published' }
 const projects = [{ name: 'fixture', description: '', artifact_count: 1 }]
-let server, browser, port
-const json = body => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
-
-test.before(async () => {
-  const socket = createServer()
-  await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve))
-  port = socket.address().port
-  await new Promise(resolve => socket.close(resolve))
-  server = spawn('node', ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: new URL('../', import.meta.url), stdio: 'ignore' })
-  for (let i = 0; i < 100; i++) {
-    try { const response = await fetch(`http://127.0.0.1:${port}/`); if (response.ok) break } catch { /* startup */ }
-    if (i === 99) throw new Error('Vite did not start')
-    await new Promise(resolve => setTimeout(resolve, 100))
-  }
-  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : chromium.executablePath()), headless: true, args: ['--no-sandbox'] })
-})
-test.after(async () => { await browser?.close(); server?.kill() })
+let fixture, browser
+test.before(async () => { fixture = await startBrowser(); browser = fixture.browser })
+test.after(async () => { await stopBrowser(fixture) })
 
 async function pageWithFixture(t, { items = [], publish = json(artifact) } = {}) {
   const page = await browser.newPage()
@@ -37,9 +20,9 @@ async function pageWithFixture(t, { items = [], publish = json(artifact) } = {})
         return route.fulfill(response)
       })
     }
-    return route.fulfill(json(url.pathname.endsWith('/artifacts') ? catalogue : url.pathname.endsWith('/projects') ? projects : url.pathname.endsWith('/config') ? { public_base_url: 'https://pub.example.test' } : { label: 'fixture' }))
+    return route.fulfill(json(catalogueBody(url.pathname, catalogue, projects, 'fixture')))
   })
-  await page.goto(`http://127.0.0.1:${port}/`)
+  await page.goto(fixture.origin)
   await page.getByRole('heading', { name: /Published Artifacts/ }).waitFor()
   return page
 }

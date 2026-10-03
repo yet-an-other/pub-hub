@@ -1,16 +1,10 @@
 import { test, before, after } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { chromium } from 'playwright'
-import { createServer } from 'vite'
+import { startBrowser, stopBrowser, catalogueBody, json } from './catalogue-fixture.mjs'
 
-let server, browser, origin
-before(async () => {
-  server = await createServer({ server: { host: '127.0.0.1', port: 0 } })
-  await server.listen()
-  origin = server.resolvedUrls.local[0]
-  browser = await chromium.launch({ ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}), args: ['--no-sandbox'] })
-})
-after(async () => { await browser?.close(); await server?.close() })
+let fixture, browser
+before(async () => { fixture = await startBrowser(); browser = fixture.browser })
+after(async () => { await stopBrowser(fixture) })
 
 const longDescription = `First line of private Project notes.\nSecond line: ${'longword'.repeat(35)} ends here.`
 
@@ -25,14 +19,11 @@ async function catalogue(width, description) {
       current = request.postDataJSON().description
       patches.push(current)
     }
-    const body = path === '/ui/api/projects' ? [{ name: 'xform', description: current, artifact_count: description ? 0 : 1 }]
-      : path === '/ui/api/projects/xform' ? { name: 'xform', description: current, artifact_count: description ? 0 : 1 }
-        : path === '/ui/api/artifacts' ? (description ? [] : [{ path: 'xform/example.html', title: 'Example', description: '', state: 'published', updated_at: '2025-01-01', total_size: 42, last_publisher: 'owner' }])
-          : path === '/ui/api/config' ? { public_base_url: 'https://pub.example.test' }
-            : { label: 'owner@example.test' }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+    const projects = [{ name: 'xform', description: current, artifact_count: description ? 0 : 1 }]
+    const artifacts = description ? [] : [{ path: 'xform/example.html', title: 'Example', description: '', state: 'published', updated_at: '2025-01-01', total_size: 42, last_publisher: 'owner' }]
+    await route.fulfill(json(path === '/ui/api/projects/xform' ? projects[0] : catalogueBody(path, artifacts, projects)))
   })
-  await page.goto(origin)
+  await page.goto(fixture.origin)
   await page.getByRole('heading', { name: 'xform' }).waitFor()
   return { page, patches }
 }
