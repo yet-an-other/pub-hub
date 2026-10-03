@@ -47,7 +47,8 @@ export function PublishForm({ initial, fixed, selection, existing, base, done, c
     xhr.open('PUT', '/ui/api/artifacts/' + path.split('/').map(encodeURIComponent).join('/'))
     xhr.withCredentials = true
     if (noOverwrite) xhr.setRequestHeader('If-None-Match', '*')
-    xhr.upload.onprogress = event => { if (event.lengthComputable) setProgress(Math.min(99, Math.round(event.loaded / event.total * 100))) }
+    xhr.upload.onprogress = event => { if (event.lengthComputable) setProgress(Math.min(100, Math.round(event.loaded / event.total * 100))) }
+    xhr.upload.onload = () => setProgress(100)
     xhr.onload = () => {
       setProgress(null)
       if (xhr.status === 401) { location.reload(); return }
@@ -72,7 +73,7 @@ export function PublishForm({ initial, fixed, selection, existing, base, done, c
     {clash === 'replace' && <p className="warning">This will replace the existing Artifact at this URL.</p>}
     <label className="path-label">Description <span className="muted">{clash === 'replace' ? 'Leave empty to keep the current description' : 'Optional, private'}</span><textarea value={description} maxLength={1000} disabled={pending} onChange={e => setDescription(e.target.value)} /></label>
     <label><input type="checkbox" checked={noOverwrite} disabled={pending} onChange={e => setNoOverwrite(e.target.checked)} /> Don't overwrite</label>
-    {progress !== null && <div role="status">Uploading and publishing… <progress max="100" value={progress} /> {progress}%</div>}
+    {progress !== null && <div role="status">{progress === 100 ? 'Files transferred. Waiting for server to finish publishing…' : 'Transferring files… Publication finishes after the server responds.'} <progress max="100" value={progress} /> {progress}%</div>}
     {failure && <p className="mutation-error" role="alert">{failure.code}: {failure.message}{(failure.code === 'busy' || failure.status === 503) && <> <button type="button" onClick={upload}>Retry</button></>}</p>}
     <div className="publish-actions"><button type="submit" disabled={!chosen || !prepared || !!problem || pending}>Publish</button><button type="button" disabled={pending} onClick={close}>Cancel</button></div>
   </form>
