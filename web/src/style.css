@@ -11,7 +11,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 
 .top { background: white; border-bottom: 1px solid #e4e6df }
 .top-inner { max-width: 1152px; margin: auto; padding: 14px 32px; display: flex; align-items: center; gap: 16px; font-size: 14px; flex-wrap: wrap }
-.top-inner b { font-size: 19px; letter-spacing: -.04em }
+.top-inner b { font: 700 20px Georgia, "Times New Roman", serif; letter-spacing: -.025em }
 .mark { width: 32px; height: 32px; display: grid; place-items: center; background: #245a43; color: white; border-radius: 8px; font: 24px Georgia, serif }
 .divider { height: 20px; border-left: 1px solid #e4e6df }
 .email { color: #57534e }
@@ -20,34 +20,40 @@ main { max-width: 1152px; margin: 0 auto; padding: 40px 32px 100px }
 .hero { display: flex; align-items: end; gap: 16px }
 .hero-actions { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 12px }
 .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #245a43; font-weight: 700 }
-h1 { font-size: clamp(27px, 4vw, 38px); letter-spacing: -.045em; font-weight: 650; margin: 8px 0 }
-.count { border: 1px solid #e4e6df; background: white; color: #78716c; font-size: 14px; padding: 2px 8px; border-radius: 6px; vertical-align: middle; letter-spacing: 0 }
+h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(29px, 4vw, 38px); line-height: 1.2; letter-spacing: -.025em; font-weight: 700; margin: 8px 0 }
+.count { border: 1px solid #e4e6df; background: white; color: #78716c; font: 500 14px Inter, ui-sans-serif, system-ui, sans-serif; padding: 2px 8px; border-radius: 6px; vertical-align: middle; letter-spacing: 0 }
 .hero p { font-size: 14px; margin: 8px 0 0 }
 .private { font-size: 12px; white-space: nowrap }
 .publish-button { background: #245a43; color: white; padding: 9px 18px; border-radius: 6px; font-size: 14px }
 .publish-button:hover, .publish-actions button:first-child:hover { background: #173a2c }
+.publish-confirmation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 24px; padding: 16px; background: #eef4ef; border: 1px solid #b8d8c3; border-radius: 8px; font-size: 14px }
+.publish-confirmation a { color: #245a43; text-decoration: underline; overflow-wrap: anywhere }
+.publish-confirmation button { color: #245a43; text-decoration: underline }
+.publish-confirmation button:last-child { margin-left: auto }
 .notice { display: flex; gap: 12px; align-items: center; margin-top: 28px; padding: 12px 16px; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; color: #78350f; font-size: 14px }
 .notice button { margin-left: auto; color: inherit; text-decoration: underline }
 .toolbar { display: flex; gap: 12px; align-items: center; margin: 24px 0 16px; font-size: 14px; flex-wrap: wrap }
 .toolbar > button { padding: 7px 10px; color: #78716c; border-radius: 6px }
 .toolbar > button[aria-pressed=true] { color: #173a2c; background: #eef4ef; border: 1px solid #dce9df }
-.toolbar small { color: #a8a29e; margin-left: 4px }
+.toolbar small { color: #57534e; margin-left: 4px }
+.toolbar > button[aria-pressed=true] small { color: #435e4b }
 .search { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: white; border: 1px solid #e4e6df; border-radius: 8px; width: min(100%, 420px) }
 .search:focus-within { border-color: #2f6b50 }
 .search input { flex: 1; min-width: 0; outline: 0; font-size: 14px }
-kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 4px }
+kbd { color: #78716c; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 4px }
 
 .inventory { border: 1px solid #e4e6df; border-radius: 12px; background: white; overflow: hidden }
 .project + .project { border-top: 1px solid #e4e6df }
 .project-head { background: #eef4ef80; padding: 12px 24px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px }
 .project-head > svg { color: #78716c; flex: none; margin-top: 3px }
 .project-info { flex: 1; min-width: 0 }
-.project-name { display: flex; align-items: baseline; gap: 8px }
-.project-name h2 { font-size: 16px; font-weight: 650; margin: 0 }
-.project-name code { font-size: 12px; color: #78716c }
+.project-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px }
+.project-name h2 { font: 700 17px Georgia, "Times New Roman", serif; letter-spacing: -.015em; margin: 0; min-width: 0; overflow-wrap: anywhere }
+.project-name code { font-size: 12px; color: #78716c; min-width: 0; overflow-wrap: anywhere }
 .project-count { margin-left: auto; font-size: 12px; color: #78716c; white-space: nowrap }
 .project-description { font-size: 14px; color: #57534e }
-.project-description > .edit-description { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.project-description-text { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere }
+.project-description > .edit-description { display: inline-block; padding: 4px 0; font-size: 12px; text-decoration: underline; text-underline-offset: 2px }
 .project-description form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px }
 .project-delete-button { margin-left: 12px; padding: 5px 8px; border: 1px solid #fecaca; border-radius: 5px; background: white; color: #991b1b; font-size: 12px; white-space: nowrap }
 .project-delete-confirm { flex-basis: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 10px; border: 1px solid #fecaca; border-radius: 6px; background: #fef2f2; font-size: 12px }
@@ -72,9 +78,10 @@ kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 .row-title strong { font-size: 16px; font-weight: 650 }
 .artifact-url { margin-top: 4px; overflow-wrap: anywhere }
 .artifact-link { color: #57534e; text-decoration: underline; text-decoration-color: #d6d3d1; text-underline-offset: 3px; overflow-wrap: anywhere }
-.copy-link { display: inline-flex; vertical-align: middle; padding: 2px; margin-left: 2px; color: #78716c; border-radius: 4px }
+.copy-link { display: inline-flex; vertical-align: middle; align-items: center; justify-content: center; width: 40px; height: 40px; margin-left: 4px; color: #57534e; border-radius: 6px }
 .copy-link:hover { color: #245a43; background: #eef4ef }
-.copy-link svg { width: 14px; height: 14px }
+.copy-link svg { width: 18px; height: 18px }
+.copy-feedback:not(:empty) { display: block; margin-top: 2px; color: #57534e; font-size: 12px }
 .description { margin: 6px 0 0; color: #57534e; white-space: pre-wrap; overflow-wrap: anywhere }
 .badge { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; padding: 2px 6px; border-radius: 5px; font-size: 11px; white-space: nowrap }
 .row-meta { display: flex; flex-direction: column; gap: 4px; color: #78716c; font-size: 12px; text-align: right; white-space: nowrap }
@@ -96,6 +103,10 @@ kbd { color: #a8a29e; border: 1px solid #e4e6df; padding: 0 5px; border-radius: 
 .mutation-error { color: #991b1b; font-size: 13px; overflow-wrap: anywhere }
 .mutation-error button { color: #991b1b; text-decoration: underline }
 .empty { padding: 18px 56px; color: #78716c; font-size: 14px }
+.catalogue-empty { border: 1px solid #e4e6df; border-radius: 8px; background: white; color: #57534e }
+.catalogue-empty p { margin: 0 0 8px }
+.catalogue-empty p:last-child { margin-bottom: 0 }
+.catalogue-empty button { color: #245a43; text-decoration: underline; text-underline-offset: 3px; font-weight: 600 }
 
 .publish-actions button:first-child { background: #245a43; color: white; padding: 9px 18px; border-radius: 6px }
 .publish-form { padding: 20px; margin: 12px 24px; border: 1px solid #dce9df; background: #eef4ef80; border-radius: 8px; display: grid; gap: 12px; font-size: 14px }

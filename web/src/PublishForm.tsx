@@ -14,12 +14,16 @@ export function PublishForm({ initial, fixed, selection, existing, base, done, c
   const [noOverwrite, setNoOverwrite] = useState(false)
   const [progress, setProgress] = useState<number | null>(null)
   const [failure, setFailure] = useState<Failure | null>(null)
+  const [pathTouched, setPathTouched] = useState(false)
+  const pathInput = useRef<HTMLInputElement>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
   const directoryInput = useRef<HTMLInputElement>(null)
+  useEffect(() => { (fixed ? (initial.endsWith('/') ? directoryInput : fileInput) : pathInput).current?.focus() }, [fixed, initial])
   const selectionVersion = useRef(0)
   const pending = progress !== null
   function choose(next: Selection) {
     selectionVersion.current++
-    setChosen(next); setFailure(null)
+    setChosen(next); setFailure(null); setPathTouched(true)
     setPrepared(null)
     if (!fixed) setPath(initial + (next.bundle ? next.name + '/' : next.name))
   }
@@ -43,7 +47,8 @@ export function PublishForm({ initial, fixed, selection, existing, base, done, c
     xhr.open('PUT', '/ui/api/artifacts/' + path.split('/').map(encodeURIComponent).join('/'))
     xhr.withCredentials = true
     if (noOverwrite) xhr.setRequestHeader('If-None-Match', '*')
-    xhr.upload.onprogress = event => { if (event.lengthComputable) setProgress(Math.min(99, Math.round(event.loaded / event.total * 100))) }
+    xhr.upload.onprogress = event => { if (event.lengthComputable) setProgress(Math.min(100, Math.round(event.loaded / event.total * 100))) }
+    xhr.upload.onload = () => setProgress(100)
     xhr.onload = () => {
       setProgress(null)
       if (xhr.status === 401) { location.reload(); return }
@@ -58,16 +63,17 @@ export function PublishForm({ initial, fixed, selection, existing, base, done, c
   }
   return <form className="publish-form" onSubmit={e => { e.preventDefault(); upload() }}>
     <h3>Publish Artifact</h3>
-    <div className="choose"><label>Choose HTML file <input type="file" accept=".html" disabled={pending} onChange={e => { const file = e.target.files?.[0]; if (file) choose({ files: [{ path: file.name, file }], bundle: false, name: file.name }) }} /></label>
+    <div className="choose"><label>Choose HTML file <input ref={fileInput} type="file" accept=".html" disabled={pending} onChange={e => { const file = e.target.files?.[0]; if (file) choose({ files: [{ path: file.name, file }], bundle: false, name: file.name }) }} /></label>
       <label>Choose folder <input ref={node => { directoryInput.current = node; node?.setAttribute('webkitdirectory', '') }} type="file" multiple disabled={pending} onChange={e => { const files = Array.from(e.target.files || []); if (files.length) { const name = files[0].webkitRelativePath.split('/')[0]; choose({ files: files.map(file => ({ path: file.webkitRelativePath.slice(name.length + 1), file })), bundle: true, name }) } }} /></label></div>
     {chosen && <p className="muted">{chosen.bundle ? 'Bundle' : 'HTML file'} · {prepared?.files.length ?? '…'} files · {size(prepared?.files.reduce((n, f) => n + f.file.size, 0) || 0)} · Title: {prepared?.title || '(none)'}</p>}
     {!!prepared?.skipped.length && <p className="warning">Skipped dot-files: {prepared.skipped.join(', ')}</p>}
-    <label className="path-label">Path <span>{base ? new URL(base).host : 'pub.bdgn.me'}/</span><input aria-label="Artifact path" value={path} readOnly={fixed} disabled={pending} onChange={e => { setPath(e.target.value); setFailure(null) }} /></label>
-    {problem && <p role="alert" className="mutation-error">{problem.code}: {problem.message}</p>}
+    <label className="path-label">Path <span>{base ? new URL(base).host : 'pub.bdgn.me'}/</span><input ref={pathInput} aria-label="Artifact path" aria-describedby="publish-path-help" value={path} readOnly={fixed} disabled={pending} onChange={e => { setPath(e.target.value); setPathTouched(true); setFailure(null) }} /></label>
+    <p id="publish-path-help" className="muted">Enter a Project and Artifact name. Use .html for a file or / for a Bundle.</p>
+    {problem && (pathTouched || !!chosen || fixed) && <p role="alert" className="mutation-error">{problem.code}: {problem.message}</p>}
     {clash === 'replace' && <p className="warning">This will replace the existing Artifact at this URL.</p>}
     <label className="path-label">Description <span className="muted">{clash === 'replace' ? 'Leave empty to keep the current description' : 'Optional, private'}</span><textarea value={description} maxLength={1000} disabled={pending} onChange={e => setDescription(e.target.value)} /></label>
     <label><input type="checkbox" checked={noOverwrite} disabled={pending} onChange={e => setNoOverwrite(e.target.checked)} /> Don't overwrite</label>
-    {progress !== null && <div role="status">Uploading and publishing… <progress max="100" value={progress} /> {progress}%</div>}
+    {progress !== null && <div role="status">{progress === 100 ? 'Files transferred. Waiting for server to finish publishing…' : 'Transferring files… Publication finishes after the server responds.'} <progress max="100" value={progress} /> {progress}%</div>}
     {failure && <p className="mutation-error" role="alert">{failure.code}: {failure.message}{(failure.code === 'busy' || failure.status === 503) && <> <button type="button" onClick={upload}>Retry</button></>}</p>}
     <div className="publish-actions"><button type="submit" disabled={!chosen || !prepared || !!problem || pending}>Publish</button><button type="button" disabled={pending} onClick={close}>Cancel</button></div>
   </form>
